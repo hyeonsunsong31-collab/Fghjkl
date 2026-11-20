@@ -72,20 +72,26 @@ final class SceneController {
     }
 
     private func addGrid() {
-        let lineMaterial = HoloMaterials.line(HoloPalette.grid, opacity: 0.35)
-        let extent: Float = 1.2
+        // Wide enough to fill the view when the camera backs off to frame many objects;
+        // lines fade towards the edges (a few shared materials, one per fade level).
+        let extent: Float = 4.0
         let step: Float = 0.1
+        let fadeLevels = 8
+        let materials = (0..<fadeLevels).map { level in
+            HoloMaterials.line(HoloPalette.grid, opacity: 0.35 * (1 - Float(level) / Float(fadeLevels)))
+        }
         let thin = MeshResource.generateBox(size: SIMD3(extent * 2, 0.0015, 0.0015))
         let thinZ = MeshResource.generateBox(size: SIMD3(0.0015, 0.0015, extent * 2))
-        var k: Float = -extent
-        while k <= extent + 0.001 {
-            let lx = ModelEntity(mesh: thin, materials: [lineMaterial])
+        let lines = Int((extent / step).rounded())
+        for i in -lines...lines {
+            let k = Float(i) * step
+            let level = min(fadeLevels - 1, Int(abs(k) / extent * Float(fadeLevels)))
+            let lx = ModelEntity(mesh: thin, materials: [materials[level]])
             lx.position = SIMD3(0, 0, k)
             root.addChild(lx)
-            let lz = ModelEntity(mesh: thinZ, materials: [lineMaterial])
+            let lz = ModelEntity(mesh: thinZ, materials: [materials[level]])
             lz.position = SIMD3(k, 0, 0)
             root.addChild(lz)
-            k += step
         }
         // Holographic emitter ring under the workspace.
         let ringMesh = try? MeshResource.generate(from: [Self.descriptor(MeshGenerator.torus(majorRadius: 0.55, minorRadius: 0.004, segments: 96, sides: 6), name: "ring")])
