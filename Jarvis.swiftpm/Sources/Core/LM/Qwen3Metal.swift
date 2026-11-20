@@ -20,7 +20,9 @@ final class Qwen3MetalModel: LMBackend, @unchecked Sendable {
 
     struct QLinear {
         let packed: MTLBuffer
+        /// 4-byte-aligned binding offset and the remaining byte shift (MLX files are often unaligned).
         let packedOffset: Int
+        let byteShift: Int
         let scales: MTLBuffer
         let biases: MTLBuffer
         let outFeatures: Int
@@ -74,8 +76,8 @@ final class Qwen3MetalModel: LMBackend, @unchecked Sendable {
         let key = ObjectIdentifier(file)
         if let b = fileBuffers[key] { return b }
         guard file.mappedLength <= device.maxBufferLength else { return nil }
-        let b = device.makeBuffer(bytesNoCopy: UnsafeMutableRawPointer(mutating: file.base), length: file.mappedLength,
-                                  options: .storageModeShared, deallocator: nil)
+        guard let b = device.makeBuffer(bytesNoCopy: UnsafeMutableRawPointer(mutating: file.base), length: file.mappedLength,
+                                        options: .storageModeShared, deallocator: nil) else { return nil }
         fileBuffers[key] = b
         return b
     }
@@ -115,15 +117,19 @@ final class Qwen3MetalModel: LMBackend, @unchecked Sendable {
         let bits = w.shape[1] * 32 / inFeatures
         let packedBuffer: MTLBuffer
         let offset: Int
-        if w.offset % 4 == 0, let fb = buffer(for: w.file) {
+        let shift: Int
+        if let fb = buffer(for: w.file) {
+            // Zero-copy: bind the memory-mapped file; kernels read bytes so any alignment works.
             packedBuffer = fb
-            offset = w.offset
+            offset = w.offset & ~3
+            shift = w.offset & 3
         } else {
             guard let copy = device.makeBuffer(bytes: w.pointer, length: w.byteCount, options: .storageModeShared) else { throw LMError.io("alloc") }
             packedBuffer = copy
             offset = 0
+            shift = 0
         }
-        return QLinear(packed: packedBuffer, packedOffset: offset, scales: try halfBuffer(s), biases: try halfBuffer(b),
+        return QLinear(packed: packedBuffer, packedOffset: offset, byteShift: shift, scales: try halfBuffer(s), biases: try halfBuffer(b),
                        outFeatures: w.shape[0], inFeatures: inFeatures, groupSize: config.groupSize, bits: bits)
     }
 
@@ -203,6 +209,7 @@ final class Qwen3MetalModel: LMBackend, @unchecked Sendable {
         setU32(e, w.inFeatures, 5)
         setU32(e, w.outFeatures, 6)
         setU32(e, w.groupSize, 7)
+        setU32(e, w.byteShift, 8)
         let rowsPerGroup = 2
         e.dispatchThreadgroups(MTLSize(width: (w.outFeatures + rowsPerGroup - 1) / rowsPerGroup, height: 1, depth: 1),
                                threadsPerThreadgroup: MTLSize(width: 32 * rowsPerGroup, height: 1, depth: 1))
@@ -258,6 +265,7 @@ final class Qwen3MetalModel: LMBackend, @unchecked Sendable {
         setU32(e, token, 5)
         setU32(e, embed.groupSize, 6)
         setU32(e, embed.bits, 7)
+        setU32(e, embed.byteShift, 8)
         e.dispatchThreads(MTLSize(width: c.hiddenSize, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
 
         for (li, L) in layers.enumerated() {
@@ -344,19 +352,27 @@ final class Qwen3MetalModel: LMBackend, @unchecked Sendable {
     #include <metal_stdlib>
     using namespace metal;
 
-    kernel void qmatvec4(device const uint* W [[buffer(0)]], device const half* S [[buffer(1)]], device const half* B [[buffer(2)]],
+    // Packed weights are read as bytes (packed_uchar4 has 1-byte alignment) so
+    // tensors at unaligned file offsets can be used straight from the mmap.
+    inline uint load_word(device const uchar* base, ulong index) {
+        device const packed_uchar4* p = (device const packed_uchar4*)(base + index * 4);
+        return as_type<uint>(uchar4(*p));
+    }
+
+    kernel void qmatvec4(device const uchar* W [[buffer(0)]], device const half* S [[buffer(1)]], device const half* B [[buffer(2)]],
                          device const float* x [[buffer(3)]], device float* y [[buffer(4)]],
                          constant uint& inF [[buffer(5)]], constant uint& outF [[buffer(6)]], constant uint& G [[buffer(7)]],
+                         constant uint& shift [[buffer(8)]],
                          uint gid [[threadgroup_position_in_grid]], uint sid [[simdgroup_index_in_threadgroup]],
                          uint lane [[thread_index_in_simdgroup]]) {
         uint row = gid * 2 + sid;
         if (row >= outF) return;
         uint wordsPerRow = inF / 8;
         uint groups = inF / G;
-        device const uint* w = W + (ulong)row * wordsPerRow;
+        device const uchar* w = W + shift + (ulong)row * wordsPerRow * 4;
         float acc = 0.0f;
         for (uint word = lane; word < wordsPerRow; word += 32) {
-            uint p = w[word];
+            uint p = load_word(w, word);
             uint j = word * 8;
             uint g = j / G;
             float s = float(S[row * groups + g]);
@@ -371,19 +387,20 @@ final class Qwen3MetalModel: LMBackend, @unchecked Sendable {
         if (lane == 0) y[row] = acc;
     }
 
-    kernel void qmatvec8(device const uint* W [[buffer(0)]], device const half* S [[buffer(1)]], device const half* B [[buffer(2)]],
+    kernel void qmatvec8(device const uchar* W [[buffer(0)]], device const half* S [[buffer(1)]], device const half* B [[buffer(2)]],
                          device const float* x [[buffer(3)]], device float* y [[buffer(4)]],
                          constant uint& inF [[buffer(5)]], constant uint& outF [[buffer(6)]], constant uint& G [[buffer(7)]],
+                         constant uint& shift [[buffer(8)]],
                          uint gid [[threadgroup_position_in_grid]], uint sid [[simdgroup_index_in_threadgroup]],
                          uint lane [[thread_index_in_simdgroup]]) {
         uint row = gid * 2 + sid;
         if (row >= outF) return;
         uint wordsPerRow = inF / 4;
         uint groups = inF / G;
-        device const uint* w = W + (ulong)row * wordsPerRow;
+        device const uchar* w = W + shift + (ulong)row * wordsPerRow * 4;
         float acc = 0.0f;
         for (uint word = lane; word < wordsPerRow; word += 32) {
-            uint p = w[word];
+            uint p = load_word(w, word);
             uint j = word * 4;
             uint g = j / G;
             float s = float(S[row * groups + g]);
@@ -507,14 +524,15 @@ final class Qwen3MetalModel: LMBackend, @unchecked Sendable {
         a[i] += b[i];
     }
 
-    kernel void embed_row(device const uint* W [[buffer(0)]], device const half* S [[buffer(1)]], device const half* B [[buffer(2)]],
+    kernel void embed_row(device const uchar* W [[buffer(0)]], device const half* S [[buffer(1)]], device const half* B [[buffer(2)]],
                           device float* x [[buffer(3)]], constant uint& dim [[buffer(4)]], constant uint& token [[buffer(5)]],
-                          constant uint& G [[buffer(6)]], constant uint& bits [[buffer(7)]], uint j [[thread_position_in_grid]]) {
+                          constant uint& G [[buffer(6)]], constant uint& bits [[buffer(7)]], constant uint& shift [[buffer(8)]],
+                          uint j [[thread_position_in_grid]]) {
         if (j >= dim) return;
         uint perWord = 32 / bits;
         uint wordsPerRow = dim / perWord;
         uint groups = dim / G;
-        uint word = W[(ulong)token * wordsPerRow + j / perWord];
+        uint word = load_word(W + shift, (ulong)token * wordsPerRow + j / perWord);
         uint mask = (1u << bits) - 1u;
         float q = float((word >> ((j % perWord) * bits)) & mask);
         uint g = j / G;

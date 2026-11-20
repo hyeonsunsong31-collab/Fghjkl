@@ -45,6 +45,18 @@ struct Qwen3Config: Equatable {
     }
 }
 
+/// Owns an aligned copy of packed weights when the file data is not 4-byte aligned.
+final class AlignedWords: @unchecked Sendable {
+    let pointer: UnsafeMutablePointer<UInt32>
+    let count: Int
+    init(copying source: UnsafeRawPointer, count: Int) {
+        self.count = count
+        pointer = .allocate(capacity: count)
+        memcpy(pointer, source, count * 4)
+    }
+    deinit { pointer.deallocate() }
+}
+
 /// A linear layer: MLX affine-quantized (packed uint32 + scales/biases) or dense float.
 struct LinearWeights {
     let outFeatures: Int
@@ -57,6 +69,8 @@ struct LinearWeights {
     let biases: [Float]
     /// Dense storage (nil for quantized).
     let dense: [Float]?
+    /// Keeps an aligned copy alive when needed.
+    var storage: AlignedWords? = nil
 
     var isQuantized: Bool { packed != nil }
     var wordsPerRow: Int { inFeatures * bits / 32 }
@@ -71,9 +85,17 @@ struct LinearWeights {
             let groups = s.shape[1]
             let bits = w.shape[1] * 32 / (groups * config.groupSize)
             let inFeatures = groups * config.groupSize
+            var storage: AlignedWords?
+            let packed: UnsafePointer<UInt32>
+            if Int(bitPattern: w.pointer) % 4 == 0 {
+                packed = w.pointer.assumingMemoryBound(to: UInt32.self)
+            } else {
+                let copy = AlignedWords(copying: w.pointer, count: w.byteCount / 4)
+                storage = copy
+                packed = UnsafePointer(copy.pointer)
+            }
             return LinearWeights(outFeatures: out, inFeatures: inFeatures, bits: bits, groupSize: config.groupSize,
-                                 packed: w.pointer.assumingMemoryBound(to: UInt32.self),
-                                 scales: try s.floats(), biases: try b.floats(), dense: nil)
+                                 packed: packed, scales: try s.floats(), biases: try b.floats(), dense: nil, storage: storage)
         }
         return LinearWeights(outFeatures: w.shape[0], inFeatures: w.shape[1], bits: 32, groupSize: 1,
                              packed: nil, scales: [], biases: [], dense: try w.floats())
