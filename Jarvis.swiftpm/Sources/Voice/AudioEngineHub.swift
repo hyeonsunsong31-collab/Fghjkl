@@ -71,7 +71,7 @@ final class AudioEngineHub: @unchecked Sendable {
         if captureMicrophone { installTapIfNeeded() }
         engine.prepare()
         try engine.start()
-        player.play()
+        if engine.isRunning { player.play() }
         isRunning = true
     }
 
@@ -132,7 +132,16 @@ final class AudioEngineHub: @unchecked Sendable {
     private var generation = 0
 
     private func schedule(_ buffer: AVAudioPCMBuffer, completion: (() -> Void)?) {
-        if !isRunning { try? start(captureMicrophone: tapInstalled) }
+        if !engine.isRunning {
+            isRunning = false
+            try? start(captureMicrophone: tapInstalled)
+        }
+        // AVAudioPlayerNode raises an exception if played while the engine is stopped
+        // (e.g. during an audio interruption): drop the audio instead of crashing.
+        guard engine.isRunning else {
+            DispatchQueue.main.async { completion?() }
+            return
+        }
         lock.lock(); scheduledBuffers += 1; let gen = generation; lock.unlock()
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             guard let self else { return }
@@ -147,14 +156,14 @@ final class AudioEngineHub: @unchecked Sendable {
                 if remaining == 0 { self.onPlaybackDrained?() }
             }
         }
-        if !player.isPlaying { player.play() }
+        if !player.isPlaying && engine.isRunning { player.play() }
     }
 
     /// Stop speech immediately (barge-in) and drop everything queued.
     func stopPlayback() {
         lock.lock(); generation += 1; scheduledBuffers = 0; lock.unlock()
         player.stop()
-        if isRunning { player.play() }
+        if engine.isRunning { player.play() }
     }
 
     var isPlaying: Bool {

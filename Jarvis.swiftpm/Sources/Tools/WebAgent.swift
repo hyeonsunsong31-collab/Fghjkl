@@ -159,7 +159,7 @@ final class WebAgent: NSObject, WKNavigationDelegate, WKDownloadDelegate {
 
     // MARK: Downloads → artefacts
 
-    nonisolated func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
         navigationResponse.canShowMIMEType ? .allow : .download
     }
 

@@ -100,9 +100,15 @@ final class JarvisController {
     func start() {
         guard !started else { return }
         started = true
-        if records.setting("onboarded") != "1" { activePanel = .onboarding }
+        // Launch arguments for automated UI smoke tests (e.g. `-JarvisSkipOnboarding YES -JarvisNoMic YES`).
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: "JarvisSkipOnboarding") { records.setSetting("onboarded", "1") }
+        if defaults.bool(forKey: "JarvisNoMic") { micMuted = true }
+        let onboarded = records.setting("onboarded") == "1" || defaults.bool(forKey: "JarvisSkipOnboarding")
+        if !onboarded { activePanel = .onboarding }
         Task {
-            if !micMuted { await speechInput.start() }
+            // Permissions are requested from the onboarding screen, not on first launch.
+            if !micMuted && onboarded { await speechInput.start() }
             appleFM.prewarm()
             await loadKokoroIfInstalled()
             await deepThink.loadIfInstalled()

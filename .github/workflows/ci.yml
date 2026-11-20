@@ -71,11 +71,22 @@ jobs:
           xcrun simctl privacy "$DEVICE" grant microphone "$BUNDLE" || true
           xcrun simctl privacy "$DEVICE" grant camera "$BUNDLE" || true
           xcrun simctl privacy "$DEVICE" grant photos "$BUNDLE" || true
+          # 1) First launch exactly as a user sees it (onboarding).
           xcrun simctl launch "$DEVICE" "$BUNDLE"
-          sleep 25
+          sleep 20
           xcrun simctl io "$DEVICE" screenshot ../screenshot-launch.png
+          xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
+          # 2) End-to-end commands through the URL scheme (grammar → brain → executor → RealityKit).
+          xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES
+          sleep 15
           xcrun simctl openurl "$DEVICE" "jarvis://open3d"
-          sleep 12
+          sleep 8
+          xcrun simctl openurl "$DEVICE" "jarvis://ask?text=make%20three%20red%20cubes"
+          sleep 8
+          xcrun simctl openurl "$DEVICE" "jarvis://ask?text=clone%20it%20twice"
+          sleep 8
+          xcrun simctl openurl "$DEVICE" "jarvis://ask?text=%ED%8C%8C%EB%9E%80%20%EA%B5%AC%20%EB%A7%8C%EB%93%A4%EC%96%B4%EC%A4%98"
+          sleep 10
           xcrun simctl io "$DEVICE" screenshot ../screenshot-3d.png
           if xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP STILL RUNNING ✅"; else echo "APP NOT RUNNING ❌"; fi
           CRASHES=$(ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i jarvis || true)
