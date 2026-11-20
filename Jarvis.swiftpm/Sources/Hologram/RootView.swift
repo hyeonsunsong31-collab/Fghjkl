@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The holographic HUD. When the 3D project space is open it becomes the
 /// full-screen background (the workshop replaces the wallpaper), and every
@@ -16,6 +17,11 @@ struct RootView: View {
                     ProjectSpaceView(scene: jarvis.scene) { action, id in contextAction(action, id) }
                         .ignoresSafeArea()
                         .transition(.opacity)
+                        .onAppear {
+                            jarvis.scene.framingInsets = Self.hudInsets(geo.size)
+                            jarvis.scene.frameAll(animated: false)
+                        }
+                        .onChange(of: geo.size) { _, size in jarvis.scene.framingInsets = Self.hudInsets(size) }
                     if jarvis.handTrackingEnabled { HandOverlay().ignoresSafeArea() }
                 } else {
                     HexBackdrop()
@@ -66,6 +72,15 @@ struct RootView: View {
         }
         .preferredColorScheme(.dark)
         .tint(Holo.cyan)
+    }
+
+    /// Screen area the HUD covers while the 3D space is open (status bar, command deck,
+    /// option cards and chat), so new objects are framed where they stay visible.
+    static func hudInsets(_ size: CGSize) -> UIEdgeInsets {
+        let wide = size.width > 760
+        return UIEdgeInsets(top: 64, left: 0,
+                            bottom: size.height * (wide ? 0.33 : 0.52),
+                            right: wide ? 336 : 0)
     }
 
     @ViewBuilder

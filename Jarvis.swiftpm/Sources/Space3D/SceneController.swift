@@ -114,8 +114,13 @@ final class SceneController {
         }
     }
 
+    /// Screen area (points) covered by the HUD over the 3D view — status bar, command
+    /// deck, chat hologram — so framing centres objects in the part that stays visible.
+    @ObservationIgnored var framingInsets = UIEdgeInsets.zero
+
     /// Keeps every object in view after commands add or clone objects: re-aims at the
-    /// group and backs the camera off just enough to fit it (never zooms in on the user).
+    /// group so it sits in the uncovered part of the screen and backs the camera off just
+    /// enough to fit it (never zooms in on the user).
     func frameAll(animated: Bool = true) {
         let objs = document.objects
         guard !objs.isEmpty else { return }
@@ -130,14 +135,28 @@ final class SceneController {
         }
         let centre = (lo + hi) / 2
         let radius = max(0.2, simd_length(hi - lo) / 2)
-        var aspect: Float = 0.75
-        if let bounds = arView?.bounds, bounds.height > 0 { aspect = Float(bounds.width / bounds.height) }
-        let halfVertical = camera.camera.fieldOfViewInDegrees * .pi / 360
-        let halfHorizontal = atan(tan(halfVertical) * aspect)
-        let needed = radius / sin(min(halfVertical, halfHorizontal)) * 1.1
-        distance = max(distance, min(6, needed))
-        // Aim slightly below the group so it sits above the chat hologram.
-        target = SIMD3(centre.x, max(0.05, centre.y - radius * 0.25), centre.z)
+
+        // Visible (uncovered) part of the view, as fractions and an offset in NDC.
+        var bounds = arView?.bounds ?? .zero
+        if bounds.width < 1 || bounds.height < 1 { bounds = CGRect(x: 0, y: 0, width: 1032, height: 1376) }
+        let w = bounds.width, h = bounds.height
+        let insets = framingInsets
+        let freeW = max(w * 0.35, w - insets.left - insets.right)
+        let freeH = max(h * 0.35, h - insets.top - insets.bottom)
+        let cx = Float((insets.left + freeW / 2 - w / 2) / (w / 2))
+        let cy = Float((insets.top + freeH / 2 - h / 2) / (h / 2))
+        let tanV = tan(camera.camera.fieldOfViewInDegrees * .pi / 360) // vertical field of view
+        let tanH = tanV * Float(w / h)
+        let fitAngle = min(atan(tanH * Float(freeW / w)), atan(tanV * Float(freeH / h)))
+        distance = max(distance, min(6, radius / sin(fitAngle) * 1.1))
+
+        // Shift the aim point so the group's centre projects onto the visible area's centre.
+        let d = max(0.35, min(6, distance))
+        let e = max(-0.2, min(1.45, elevation))
+        let forward = -SIMD3<Float>(cos(e) * sin(azimuth), sin(e), cos(e) * cos(azimuth))
+        let right = SIMD3<Float>(cos(azimuth), 0, -sin(azimuth))
+        let up = simd_cross(right, forward)
+        target = centre - right * (cx * d * tanH) + up * (cy * d * tanV)
         updateCamera(animated: animated && arView != nil)
     }
 
