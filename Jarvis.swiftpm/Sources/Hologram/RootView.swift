@@ -40,6 +40,8 @@ struct RootView: View {
                             Text(jarvis.currentLanguage == .korean ? "\"Wake up Jarvis\" 라고 말씀하시거나 비상 웨이크 버튼을 누르십시오"
                                                                    : "Say \"Wake up Jarvis\" or press the emergency wake button")
                                 .font(Holo.mono(12)).foregroundStyle(Holo.ice.opacity(0.7)).multilineTextAlignment(.center)
+                                // Hidden (layout kept) while the onboarding card sits on top of it.
+                                .opacity(jarvis.activePanel == .onboarding ? 0 : 1)
                         } else {
                             HoloWaveform(level: jarvis.inputLevel, color: Holo.phaseColor(jarvis.phase)).frame(width: 220, height: 28)
                         }

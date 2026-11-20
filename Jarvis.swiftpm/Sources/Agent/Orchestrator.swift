@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Runs one conversational turn end to end:
 ///
@@ -138,6 +139,15 @@ final class Orchestrator {
         c.lastTurn = result
         c.currentRunID = nil
         if c.phase == .thinking { c.phase = c.speech.isSpeaking ? .speaking : .listening }
+        // Diagnostics only: route, intents and outcome (never the user's words).
+        let intents: String = useFast ? parsed.commands.map { $0.intent.rawValue }.joined(separator: ",") : decision.action.rawValue
+        let lang: String = language == .korean ? "ko" : "en"
+        let route: String = useFast ? "fast" : decision.action.rawValue
+        let secs = String(format: "%.2f", seconds)
+        let objectCount = c.scene.document.objects.count
+        let ok = result.success
+        let turn = turnCounter
+        Log.agent.info("Turn \(turn, privacy: .public): lang=\(lang, privacy: .public) route=\(route, privacy: .public) intents=\(intents, privacy: .public) success=\(ok, privacy: .public) \(secs, privacy: .public)s objects=\(objectCount, privacy: .public)")
 
         pending = PendingFeedback(success: result.success, seconds: seconds, violations: violations,
                                   intent: parsed.commands.first?.intent.intentClass ?? (useFast ? nil : decision.topIntent),

@@ -76,18 +76,17 @@ jobs:
           sleep 20
           xcrun simctl io "$DEVICE" screenshot ../screenshot-launch.png
           xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
-          # 2) End-to-end commands through the URL scheme (grammar → brain → executor → RealityKit).
-          xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES
-          sleep 15
-          xcrun simctl openurl "$DEVICE" "jarvis://open3d"
-          sleep 8
-          xcrun simctl openurl "$DEVICE" "jarvis://ask?text=make%20three%20red%20cubes"
-          sleep 8
-          xcrun simctl openurl "$DEVICE" "jarvis://ask?text=clone%20it%20twice"
-          sleep 8
-          xcrun simctl openurl "$DEVICE" "jarvis://ask?text=%ED%8C%8C%EB%9E%80%20%EA%B5%AC%20%EB%A7%8C%EB%93%A4%EC%96%B4%EC%A4%98"
-          sleep 10
+          # 2) End-to-end commands (grammar → brain → executor → RealityKit), fed by a launch-argument
+          #    script because `simctl openurl` shows an "Open in Jarvis?" confirmation that CI cannot tap.
+          xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
+            --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log.txt 2>&1 &
+          LOGPID=$!
+          xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES \
+            -JarvisScript "open the 3D space || make three red cubes || clone it twice || 파란 구 만들어줘"
+          sleep 60
           xcrun simctl io "$DEVICE" screenshot ../screenshot-3d.png
+          kill $LOGPID || true
+          echo "---- app log (agent) ----"; grep -E "Script command|agent|space3d" ../app-log.txt | tail -60 || true
           if xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP STILL RUNNING ✅"; else echo "APP NOT RUNNING ❌"; fi
           CRASHES=$(ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i jarvis || true)
           if [ -n "$CRASHES" ]; then echo "CRASH REPORTS:"; for f in $CRASHES; do head -120 ~/Library/Logs/DiagnosticReports/$f; done; exit 1; fi
@@ -100,3 +99,4 @@ jobs:
             Jarvis.swiftpm/build.log
             screenshot-launch.png
             screenshot-3d.png
+            app-log.txt

@@ -33,6 +33,10 @@ final class MusicService: NSObject, WKNavigationDelegate {
         super.init()
         webView.navigationDelegate = self
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
+        // Idle player must not show as a grey box on the HUD.
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
     }
 
     private func load(_ url: URL) async {

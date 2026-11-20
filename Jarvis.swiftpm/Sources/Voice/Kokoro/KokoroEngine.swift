@@ -229,7 +229,7 @@ final class NeuralG2P {
             let encOut = try encoder.prediction(from: MLDictionaryFeatureProvider(dictionary: ["input_ids": MLFeatureValue(multiArray: enc)]))
             guard let hidden = encOut.featureValue(for: "encoder_hidden_states")?.multiArrayValue else { return nil }
             var decoded: [Int32] = [1]
-            for step in 0..<63 {
+            for _ in 0..<63 {
                 let n = decoded.count
                 let ids = try MLMultiArray(shape: [1, NSNumber(value: n)], dataType: .int32)
                 let pos = try MLMultiArray(shape: [1, NSNumber(value: n)], dataType: .int32)
@@ -247,8 +247,10 @@ final class NeuralG2P {
                     "causal_mask": MLFeatureValue(multiArray: mask),
                 ]))
                 guard let logits = out.featureValue(for: "logits")?.multiArrayValue,
-                      let vocabSize = logits.shape.last?.intValue else { break }
-                let offset = step * vocabSize
+                      let vocabSize = logits.shape.last?.intValue, vocabSize > 0 else { break }
+                // Logits cover every decoder position ([1, n, V]) or only the last one ([1, 1, V]).
+                let positions = max(1, logits.count / vocabSize)
+                let offset = (min(n, positions) - 1) * vocabSize
                 var best = 0
                 var bestValue = -Float.infinity
                 for v in 0..<vocabSize {

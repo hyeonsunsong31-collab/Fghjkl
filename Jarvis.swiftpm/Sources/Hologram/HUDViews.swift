@@ -82,10 +82,13 @@ struct MiniPlayer: View {
     @Environment(JarvisController.self) private var jarvis
     var body: some View {
         HStack(spacing: 10) {
+            // The web player stays in the window (WebKit needs that for playback) but is
+            // shrunk to a single invisible point while nothing is playing.
             MusicPlayerHost(music: jarvis.music)
-                .frame(width: 96, height: 54)
+                .frame(width: jarvis.music.nowPlaying == nil ? 1 : 96, height: jarvis.music.nowPlaying == nil ? 1 : 54)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-                .opacity(jarvis.music.nowPlaying == nil ? 0.02 : 1)
+                .opacity(jarvis.music.nowPlaying == nil ? 0.01 : 1)
+                .allowsHitTesting(jarvis.music.nowPlaying != nil)
             if let song = jarvis.music.nowPlaying {
                 VStack(alignment: .leading, spacing: 2) {
                     HUDLabel(text: jarvis.currentLanguage == .korean ? "재생 중" : "Now playing", color: Holo.cyan, size: 8)

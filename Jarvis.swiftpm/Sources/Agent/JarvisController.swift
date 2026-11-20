@@ -3,6 +3,7 @@ import NaturalLanguage
 import SwiftUI
 import UIKit
 import Observation
+import os
 
 enum AssistantPhase: String {
     case asleep, listening, thinking, speaking
@@ -114,6 +115,31 @@ final class JarvisController {
             await deepThink.loadIfInstalled()
         }
         startLatticeLoop()
+        // Scripted conversation for automated end-to-end tests, e.g.
+        // `-JarvisScript "open the 3D space || make three red cubes || clone it twice"`.
+        if let script = defaults.string(forKey: "JarvisScript"), !script.isEmpty { runScript(script) }
+    }
+
+    /// Submits each `||`-separated command in turn, waiting for the previous turn
+    /// (and its spoken reply) to finish, exactly as if it had been typed.
+    private func runScript(_ script: String) {
+        let commands = script.components(separatedBy: "||")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            for command in commands {
+                guard let self else { return }
+                Log.agent.info("Script command: \(command, privacy: .public)")
+                self.submit(command, modality: .text)
+                var ticks = 0
+                while (self.currentTask != nil || self.speech.isSpeaking) && ticks < 40 {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    ticks += 1
+                }
+                try? await Task.sleep(nanoseconds: 800_000_000)
+            }
+        }
     }
 
     private func restoreSettings() {
