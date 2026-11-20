@@ -46,9 +46,46 @@ jobs:
             OTHER_SWIFT_FLAGS='$(inherited) -continue-building-after-errors' \
             build 2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | sort -u | head -150 || true
           grep -q "BUILD SUCCEEDED" build.log
-      - name: Upload build log
+      - name: Warning summary
+        if: always()
+        working-directory: Jarvis.swiftpm
+        run: |
+          echo "warnings: $(grep -c 'warning:' build.log || true)"
+          grep 'warning:' build.log | sed -E 's/^.*Sources\///' | sort -u | head -60 || true
+      - name: Launch in iPad simulator (smoke test)
+        working-directory: Jarvis.swiftpm
+        run: |
+          set -x
+          xcodebuild -scheme Jarvis -destination 'generic/platform=iOS Simulator' -derivedDataPath dd \
+            -skipMacroValidation -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build > sim-build.log 2>&1 || (tail -50 sim-build.log; exit 1)
+          APP=$(find dd/Build/Products -name "*.app" -maxdepth 3 | head -1)
+          echo "app: $APP"
+          DEVICE=$(xcrun simctl list devices available | grep -E "iPad Pro|iPad Air" | head -1 | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          echo "device: $DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" "$APP"
+          BUNDLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist")
+          echo "bundle: $BUNDLE"
+          /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" || echo "NO BACKGROUND MODES IN INFO.PLIST"
+          xcrun simctl privacy "$DEVICE" grant microphone "$BUNDLE" || true
+          xcrun simctl privacy "$DEVICE" grant camera "$BUNDLE" || true
+          xcrun simctl privacy "$DEVICE" grant photos "$BUNDLE" || true
+          xcrun simctl launch "$DEVICE" "$BUNDLE"
+          sleep 25
+          xcrun simctl io "$DEVICE" screenshot ../screenshot-launch.png
+          xcrun simctl openurl "$DEVICE" "jarvis://open3d"
+          sleep 12
+          xcrun simctl io "$DEVICE" screenshot ../screenshot-3d.png
+          if xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP STILL RUNNING ✅"; else echo "APP NOT RUNNING ❌"; fi
+          CRASHES=$(ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i jarvis || true)
+          if [ -n "$CRASHES" ]; then echo "CRASH REPORTS:"; for f in $CRASHES; do head -120 ~/Library/Logs/DiagnosticReports/$f; done; exit 1; fi
+      - name: Upload build log and screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-build-log
-          path: Jarvis.swiftpm/build.log
+          name: ios-build-and-screens
+          path: |
+            Jarvis.swiftpm/build.log
+            screenshot-launch.png
+            screenshot-3d.png

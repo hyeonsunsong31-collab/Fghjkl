@@ -75,9 +75,12 @@ final class PresenceManager: NSObject, AVPictureInPictureControllerDelegate, AVP
     }
 
     private var frameIndex = 0
+    /// Mirror of the mic state readable from any thread (AVKit may query off the main thread).
+    nonisolated(unsafe) private static var pausedFlag = false
 
     private func renderFrame() {
         frameIndex += 1
+        Self.pausedFlag = JarvisController.shared.micMuted
         let jarvis = JarvisController.shared
         let size = CGSize(width: 480, height: 270)
         let t = Double(frameIndex) * 0.2
@@ -183,7 +186,7 @@ final class PresenceManager: NSObject, AVPictureInPictureControllerDelegate, AVP
     }
 
     nonisolated func pictureInPictureControllerIsPlaybackPaused(_ pictureInPictureController: AVPictureInPictureController) -> Bool {
-        MainActor.assumeIsolated { JarvisController.shared.micMuted }
+        Self.pausedFlag
     }
 
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, didTransitionToRenderSize newRenderSize: CMVideoDimensions) {}
