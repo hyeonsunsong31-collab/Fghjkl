@@ -223,7 +223,8 @@ final class SpeechInputService {
             if let text = hypothesis?.text, let match = wakeMatcher.match(text) {
                 cancelSessions()
                 onWake?(match)
-                beginSessions()
+                // `onWake` usually switches to conversation mode, which restarts sessions itself.
+                if sessions.isEmpty { beginSessions() }
                 return
             }
             if failed || hypothesis?.isFinal == true { restartSessionLater() }

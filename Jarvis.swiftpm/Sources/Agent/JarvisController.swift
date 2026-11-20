@@ -139,6 +139,8 @@ final class JarvisController {
         speechInput.onUtterance = { [weak self] text, language, confidence in
             guard let self else { return }
             self.partialTranscript = ""
+            // Ignore our own speech that leaked past the echo canceller.
+            if self.speech.isLikelyEcho(text) { return }
             self.submit(text, modality: .voice, language: language, confidence: confidence)
         }
         speechInput.onSpeechActivity = { [weak self] speaking in
@@ -239,7 +241,7 @@ final class JarvisController {
         let hangul = partial.unicodeScalars.filter { Hangul.isSyllable($0) }.count
         guard words >= 2 || hangul >= 3 else { return }
         // Reject our own echo that slipped past the echo canceller.
-        if FuzzyMatch.similarity(partial, String(speech.currentText.prefix(partial.count + 8))) > 0.55 { return }
+        if speech.isLikelyEcho(partial) { return }
         possibleBargeIn = false
         cancelCurrentTurn()
         phase = .listening

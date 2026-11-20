@@ -17,11 +17,17 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
     var rate: Float = 1
     private(set) var kokoroReady = false
     private(set) var isSpeaking = false {
-        didSet { if oldValue != isSpeaking { onSpeakingChanged?(isSpeaking) } }
+        didSet {
+            if oldValue && !isSpeaking { lastSpeechEnd = Date() }
+            if oldValue != isSpeaking { onSpeakingChanged?(isSpeaking) }
+        }
     }
+    private var lastSpeechEnd = Date.distantPast
     var onSpeakingChanged: ((Bool) -> Void)?
     /// Text currently being spoken (used to reject our own echo during barge-in detection).
     private(set) var currentText = ""
+    /// Sentences spoken recently (for rejecting our own voice picked up by the microphone).
+    private var spokenHistory: [(text: String, time: Date)] = []
 
     private let synthesizer = AVSpeechSynthesizer()
     private var queue: [(text: String, language: DetectedLanguage)] = []
@@ -83,6 +89,20 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
         currentText = ""
     }
 
+    /// Is `heard` most likely Jarvis' own voice (echo) rather than the user?
+    /// True when most of its words were spoken by Jarvis in the last few seconds.
+    func isLikelyEcho(_ heard: String, within seconds: TimeInterval = 8) -> Bool {
+        let now = Date()
+        // Echo is only physically possible while (or just after) the speaker is playing.
+        guard isSpeaking || now.timeIntervalSince(lastSpeechEnd) < 1.5 else { return false }
+        let recent = spokenHistory.filter { now.timeIntervalSince($0.time) < seconds }.map(\.text).joined(separator: " ") + " " + currentText
+        let spokenWords = Set(TextEncoder.tokens(recent))
+        let heardWords = TextEncoder.tokens(heard)
+        guard heardWords.count >= 2, !spokenWords.isEmpty else { return false }
+        let overlap = heardWords.filter { spokenWords.contains($0) }.count
+        return Double(overlap) / Double(heardWords.count) >= 0.7
+    }
+
     // MARK: Pipeline
 
     private func pump() {
@@ -97,6 +117,8 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
             while gen == self.generation, !self.queue.isEmpty {
                 let item = self.queue.removeFirst()
                 self.currentText = item.text
+                self.spokenHistory.append((item.text, Date()))
+                if self.spokenHistory.count > 12 { self.spokenHistory.removeFirst(self.spokenHistory.count - 12) }
                 if item.language == .english && self.kokoroReady {
                     let voice = self.englishVoice, speed = self.rate
                     let samples = (try? await KokoroEngine.shared.synthesize(item.text, voice: voice, speed: speed)) ?? []
