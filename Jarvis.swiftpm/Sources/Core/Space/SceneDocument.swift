@@ -19,8 +19,10 @@ struct SceneObject: Codable, Identifiable, Equatable {
 
     var isComposite: Bool { !(parts ?? []).isEmpty }
 
-    /// Approximate half-extent used for spacing clones.
+    /// Widest horizontal extent (metres, after scale), used for spacing.
     var footprint: Float { max(size.x * scale.x, size.z * scale.z, 0.1) }
+    /// Radius of the floor circle the object occupies.
+    var clearance: Float { footprint / 2 }
 }
 
 /// The complete, persistable project (the 3D workspace that replaces the wallpaper).
@@ -34,12 +36,52 @@ struct SceneDocument: Codable, Equatable {
 
     func index(of id: String) -> Int? { objects.firstIndex { $0.id == id } }
 
-    /// Next free spot on the floor, laid out in a gentle arc in front of the camera.
+    /// Gap kept between neighbouring objects on the floor.
+    static let spacingGap: Float = 0.05
+
+    /// True when a floor circle of radius `clearance` at `p` touches no existing object.
+    func isFree(_ p: SIMD3<Float>, clearance: Float, ignoring: Set<String> = []) -> Bool {
+        for o in objects where !ignoring.contains(o.id) {
+            let dx = p.x - o.position.x, dz = p.z - o.position.z
+            let minimum = clearance + o.clearance + Self.spacingGap
+            if dx * dx + dz * dz < minimum * minimum { return false }
+        }
+        return true
+    }
+
+    /// Next free spot on the floor: rows across the workspace (front row first), filled
+    /// from the centre outwards (centre, right, left, …), spaced so nothing overlaps.
     func nextPosition(for size: SIMD3<Float>) -> SIMD3<Float> {
-        let n = Float(objects.count)
-        let radius: Float = 0.35 + 0.08 * (n / 6).rounded(.down)
-        let angle = (n.truncatingRemainder(dividingBy: 6) - 2.5) * 0.45
-        return SIMD3(radius * sin(angle), size.y / 2, -radius * cos(angle) + 0.2)
+        let r = max(size.x, size.z, 0.1) / 2
+        let pitch = 2 * r + Self.spacingGap * 1.6
+        let rowPitch = max(0.3, pitch)
+        let slots = max(1, Int((1.0 / pitch).rounded(.down)))
+        for row in 0..<16 {
+            let z = -0.1 - Float(row) * rowPitch
+            for k in 0...(slots * 2) {
+                let index = Float((k + 1) / 2) * (k % 2 == 0 ? -1 : 1) // 0, +1, -1, +2, -2 …
+                let p = SIMD3(index * pitch, size.y / 2, z)
+                if isFree(p, clearance: r) { return p }
+            }
+        }
+        return SIMD3(0, size.y / 2, -0.1 - 16 * rowPitch - 0.3 * Float(objects.count))
+    }
+
+    /// Nearest free spot to `origin`, trying the preferred direction first, then right,
+    /// left, behind and in front, at growing multiples of `step`.
+    func freeSpot(near origin: SIMD3<Float>, clearance: Float, step: Float, preferred: SIMD3<Float>? = nil) -> SIMD3<Float> {
+        var directions: [SIMD3<Float>] = [SIMD3(1, 0, 0), SIMD3(-1, 0, 0), SIMD3(0, 0, -1), SIMD3(0, 0, 1)]
+        if let d = preferred, d.x * d.x + d.z * d.z > 1e-6 {
+            let n = (d.x * d.x + d.z * d.z).squareRoot()
+            directions.insert(SIMD3(d.x / n, 0, d.z / n), at: 0)
+        }
+        for multiple in 1...16 {
+            for d in directions {
+                let p = origin + d * step * Float(multiple)
+                if isFree(p, clearance: clearance) { return p }
+            }
+        }
+        return origin + SIMD3(step * 17, 0, 0)
     }
 
     // MARK: Mutations
@@ -76,7 +118,7 @@ struct SceneDocument: Codable, Equatable {
         return obj
     }
 
-    /// Duplicate objects `count` times, each offset to the right of the previous copy.
+    /// Duplicate objects `count` times, each placed in the nearest free spot beside the previous copy.
     mutating func clone(_ ids: [String], count: Int) -> [SceneObject] {
         var created: [SceneObject] = []
         for id in ids {
@@ -86,7 +128,10 @@ struct SceneDocument: Codable, Equatable {
                 var copy = previous
                 copy.id = UUID().uuidString
                 copy.createdAt = Date()
-                copy.position.x += previous.footprint * 1.25
+                // Keep going in the direction of the previous copy; never overlap anything.
+                let heading = previous.id == original.id ? nil : previous.position - original.position
+                copy.position = freeSpot(near: previous.position, clearance: previous.clearance,
+                                         step: previous.footprint + Self.spacingGap * 1.6, preferred: heading)
                 copy.parts = copy.parts?.map { var p = $0; p.id = UUID().uuidString; return p }
                 objects.append(copy)
                 created.append(copy)

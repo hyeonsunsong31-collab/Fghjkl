@@ -29,6 +29,7 @@ final class SceneController {
     @ObservationIgnored private var dragState: (id: String, planePoint: SIMD3<Float>, normal: SIMD3<Float>, offset: SIMD3<Float>)?
     @ObservationIgnored private var gestureScaleStart: (id: String, scale: SIMD3<Float>, rotation: SIMD3<Float>)?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var cameraAnimation: AnimationPlaybackController?
 
     // Orbit camera.
     var azimuth: Float = 0
@@ -53,6 +54,7 @@ final class SceneController {
         }
         updateCamera()
         rebuildAll()
+        frameAll(animated: false)
     }
 
     private func addLighting() {
@@ -96,11 +98,47 @@ final class SceneController {
 
     // MARK: Camera
 
-    func updateCamera() {
+    func updateCamera(animated: Bool = false) {
         let e = max(-0.2, min(1.45, elevation))
         let d = max(0.35, min(6, distance))
         let offset = SIMD3<Float>(d * cos(e) * sin(azimuth), d * sin(e), d * cos(e) * cos(azimuth))
-        camera.look(at: target, from: target + offset, relativeTo: nil)
+        // Any direct manipulation (orbit, pan, zoom) takes over from a running glide.
+        cameraAnimation?.stop()
+        cameraAnimation = nil
+        if animated {
+            let probe = Entity()
+            probe.look(at: target, from: target + offset, relativeTo: nil)
+            cameraAnimation = camera.move(to: probe.transform, relativeTo: nil, duration: 0.6, timingFunction: .easeInOut)
+        } else {
+            camera.look(at: target, from: target + offset, relativeTo: nil)
+        }
+    }
+
+    /// Keeps every object in view after commands add or clone objects: re-aims at the
+    /// group and backs the camera off just enough to fit it (never zooms in on the user).
+    func frameAll(animated: Bool = true) {
+        let objs = document.objects
+        guard !objs.isEmpty else { return }
+        var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+        var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+        for o in objs {
+            let half = o.size * o.scale / 2
+            // Composite models stand on their origin; primitives are centred on it.
+            let centre = o.isComposite ? SIMD3<Float>(o.position.x, o.position.y + half.y, o.position.z) : o.position
+            lo = simd_min(lo, centre - half)
+            hi = simd_max(hi, centre + half)
+        }
+        let centre = (lo + hi) / 2
+        let radius = max(0.2, simd_length(hi - lo) / 2)
+        var aspect: Float = 0.75
+        if let bounds = arView?.bounds, bounds.height > 0 { aspect = Float(bounds.width / bounds.height) }
+        let halfVertical = camera.camera.fieldOfViewInDegrees * .pi / 360
+        let halfHorizontal = atan(tan(halfVertical) * aspect)
+        let needed = radius / sin(min(halfVertical, halfHorizontal)) * 1.1
+        distance = max(distance, min(6, needed))
+        // Aim slightly below the group so it sits above the chat hologram.
+        target = SIMD3(centre.x, max(0.05, centre.y - radius * 0.25), centre.z)
+        updateCamera(animated: animated && arView != nil)
     }
 
     func orbit(dx: Float, dy: Float) {
@@ -261,6 +299,7 @@ final class SceneController {
             created.append(document.add(shape: shape, color: color ?? "cyan", size: size, text: text))
         }
         rebuildAll()
+        frameAll()
         scheduleSave()
         return created
     }
@@ -270,6 +309,7 @@ final class SceneController {
         checkpoint()
         let obj = document.addComposite(spec, color: color)
         rebuildAll()
+        frameAll()
         scheduleSave()
         return obj
     }
@@ -281,6 +321,7 @@ final class SceneController {
         checkpoint()
         let created = document.clone(ids, count: count)
         rebuildAll()
+        frameAll()
         scheduleSave()
         return created
     }
