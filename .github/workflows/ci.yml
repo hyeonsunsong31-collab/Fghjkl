@@ -43,7 +43,8 @@ jobs:
             -skipMacroValidation \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)" || true
+            OTHER_SWIFT_FLAGS='$(inherited) -continue-building-after-errors' \
+            build 2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | sort -u | head -150 || true
           grep -q "BUILD SUCCEEDED" build.log
       - name: Upload build log
         if: always()

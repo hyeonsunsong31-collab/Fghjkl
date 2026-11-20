@@ -1,0 +1,12 @@
+{
+  "name": "Jarvis",
+  "wakePhrase": "wake up Jarvis",
+  "wakeResponse": "Jarvis at your service, sir.",
+  "latticeNeurons": 206158430208,
+  "voices": ["bm_george", "bm_lewis", "bm_daniel", "bm_fable"],
+  "models": {
+    "kokoro": "aufklarer/Kokoro-82M-CoreML-INT8",
+    "britishLexicon": "hexgrad/misaki gb_gold.json + gb_silver.json",
+    "deepThink": ["mlx-community/Qwen3-4B-Instruct-2507-4bit", "mlx-community/Qwen3-1.7B-4bit"]
+  }
+}

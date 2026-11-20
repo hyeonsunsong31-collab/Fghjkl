@@ -269,7 +269,8 @@ final class Orchestrator {
     // MARK: Language-model path
 
     private func runLanguageModel(text: String, language: DetectedLanguage, decision: BrainDecision, deep: Bool, runID: String) async -> (AgentTurnResult, Int) {
-        let engine: LanguageEngine = deep ? c.deepThink : (c.appleFM.isAvailable ? c.appleFM : c.fallback)
+        let engine: LanguageEngine
+        if deep { engine = c.deepThink } else if c.appleFM.isAvailable { engine = c.appleFM } else { engine = c.fallback }
         let charLimit = Int(200 + 900 * decision.cerebellar.verbosity)
         var request = LLMRequest(userText: text, language: language, context: decision.gatedChannels,
                                  withTools: decision.action == .toolUse || decision.topIntent != .smallTalk,
