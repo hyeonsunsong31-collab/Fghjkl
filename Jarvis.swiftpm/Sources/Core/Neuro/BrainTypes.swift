@@ -48,7 +48,8 @@ struct ContextChannel: Codable, Equatable {
         self.id = id
         self.kind = kind
         self.text = text
-        self.tokenCost = max(1, text.count / 3)
+        // Rough token estimate: Hangul packs far fewer characters per token than Latin text.
+        self.tokenCost = max(1, Hangul.hangulRatio(text) > 0.3 ? text.count * 2 / 3 : text.count / 3)
         self.salience = salience
         self.recency = recency
         self.pinned = pinned
