@@ -40,8 +40,12 @@ final class Orchestrator {
 
         // Typed or spoken wake phrase with a trailing command.
         if let wake = WakeWordMatcher().match(text) {
+            if wake.trailingCommand.isEmpty {
+                // An explicit wake phrase is always answered with the wake response.
+                c.respondToWake()
+                return
+            }
             if !c.isAwake { c.wake(source: modality) }
-            if wake.trailingCommand.isEmpty { return }
             text = wake.trailingCommand
         }
 

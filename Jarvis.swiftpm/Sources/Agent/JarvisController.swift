@@ -190,6 +190,15 @@ final class JarvisController {
         PresenceManager.shared.awakeStateChanged(true)
     }
 
+    /// Speak "Jarvis at your service, sir." (typed or repeated wake phrase while already awake).
+    func respondToWake() {
+        if !isAwake { wake(source: .text, speak: false) }
+        speech.stop()
+        appendMessage(.assistant, Persona.wakeResponse, language: .english)
+        records.logMessage(role: "assistant", text: Persona.wakeResponse, language: .english, runID: nil)
+        speech.speak(Persona.wakeResponse, language: .english)
+    }
+
     func sleep() {
         phase = .asleep
         brain.sleep()
