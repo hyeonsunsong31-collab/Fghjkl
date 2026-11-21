@@ -94,3 +94,8 @@ iOS는 어떤 앱도 전원을 켤 때 자동 실행되도록 허용하지 않�
 - **와이파이 등 시스템 설정이 안 바뀜**: Jarvis Bridge 단축어가 필요합니다(5장).
 - **백그라운드에서 웨이크가 안 됨**: Playgrounds 실행 중에는 iOS가 백그라운드를 보장하지 않습니다. AssistiveTouch/Siri 단축어를 쓰시거나 TestFlight 설치형을 사용하십시오.
 - **빌드 오류**: Swift Playgrounds 4.7 이상인지, `Package.swift`의 `platforms: [.iOS("26.0")]`가 유지되는지 확인.
+- **열자마자 "Loading failed" / `CouldNotFindNullRecordSeparator`**: Swift Playground가 `Package.swift`를 해석한 결과를 읽지 못했다는 뜻입니다.
+  1. 저장소의 **최신 버전**을 다시 내려받으십시오. `Package.swift`를 영문(ASCII)만 쓰도록 고친 버전이어야 합니다. `Package.swift`에는 한글·특수문자(—, “ ” 등)를 넣지 마십시오. 권한 안내문도 영문으로 둡니다.
+  2. 저장소 최상위 폴더가 아니라 **`Jarvis.swiftpm`** 을 여십시오.
+  3. `Jarvis.swiftpm`을 파일 앱에서 **iCloud Drive › Swift Playground** 폴더(또는 나의 iPad › Swift Playground)로 옮긴 뒤, Swift Playground의 프로젝트 목록에서 여십시오. 예전에 열었던 사본은 지우고 새로 여는 것이 좋습니다.
+  4. 그래도 같으면 Swift Playground에서 **새 빈 앱**을 만들어 실행해 보십시오. 빈 앱도 "Failed to load / Loading failed"로 실패한다면 Jarvis가 아니라 **iPadOS 27의 Swift Playground 문제**(Apple이 추적 중인 버그)입니다. iPadOS를 최신 버전으로 업데이트하고 기기를 재시동하십시오.

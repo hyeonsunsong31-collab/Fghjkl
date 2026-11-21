@@ -13,6 +13,12 @@ jobs:
     container: swift:6.2-noble
     steps:
       - uses: actions/checkout@v4
+      - name: App manifest is plain ASCII (Swift Playground compatibility)
+        run: |
+          if LC_ALL=C grep -nP '[^\x00-\x7F]' Jarvis.swiftpm/Package.swift; then
+            echo "::error file=Jarvis.swiftpm/Package.swift::Non-ASCII characters make Swift Playground fail to load the package (CouldNotFindNullRecordSeparator)"
+            exit 1
+          fi
       - name: Install SQLite headers
         run: apt-get update -qq && apt-get install -y -qq libsqlite3-dev > /dev/null
       - name: swift test
@@ -33,6 +39,15 @@ jobs:
       - name: List schemes
         working-directory: Jarvis.swiftpm
         run: xcodebuild -list
+      - name: Evaluated app manifest (size and encoding)
+        working-directory: Jarvis.swiftpm
+        run: |
+          if swift package dump-package > ../manifest.json 2> ../manifest.err; then
+            echo "manifest JSON bytes: $(wc -c < ../manifest.json)"
+            LC_ALL=C grep -c '[^ -~]' ../manifest.json && echo "non-ASCII bytes present" || echo "manifest JSON is ASCII"
+          else
+            echo "swift package dump-package cannot evaluate AppleProductTypes manifests here:"; head -5 ../manifest.err
+          fi
       - name: Build app (no signing)
         working-directory: Jarvis.swiftpm
         run: |
