@@ -39,15 +39,6 @@ jobs:
       - name: List schemes
         working-directory: Jarvis.swiftpm
         run: xcodebuild -list
-      - name: Evaluated app manifest (size and encoding)
-        working-directory: Jarvis.swiftpm
-        run: |
-          if swift package dump-package > ../manifest.json 2> ../manifest.err; then
-            echo "manifest JSON bytes: $(wc -c < ../manifest.json)"
-            LC_ALL=C grep -c '[^ -~]' ../manifest.json && echo "non-ASCII bytes present" || echo "manifest JSON is ASCII"
-          else
-            echo "swift package dump-package cannot evaluate AppleProductTypes manifests here:"; head -5 ../manifest.err
-          fi
       - name: Build app (no signing)
         working-directory: Jarvis.swiftpm
         run: |
@@ -82,7 +73,10 @@ jobs:
           xcrun simctl install "$DEVICE" "$APP"
           BUNDLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist")
           echo "bundle: $BUNDLE"
-          /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" || echo "NO BACKGROUND MODES IN INFO.PLIST"
+          # Capabilities (purpose strings) and Info-Extra.plist must both reach the app's Info.plist.
+          for KEY in UIBackgroundModes CFBundleURLTypes:0:CFBundleURLSchemes NSMicrophoneUsageDescription NSSpeechRecognitionUsageDescription NSCameraUsageDescription; do
+            /usr/libexec/PlistBuddy -c "Print :$KEY" "$APP/Info.plist" || { echo "MISSING $KEY IN INFO.PLIST"; exit 1; }
+          done
           xcrun simctl privacy "$DEVICE" grant microphone "$BUNDLE" || true
           xcrun simctl privacy "$DEVICE" grant camera "$BUNDLE" || true
           xcrun simctl privacy "$DEVICE" grant photos "$BUNDLE" || true
