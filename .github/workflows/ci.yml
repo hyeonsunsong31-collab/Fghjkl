@@ -32,7 +32,7 @@ jobs:
       matrix:
         # Swift Playground 4.7 (March 2026) bundles an iOS 26 SDK of that era; Xcode 26.0 cannot
         # build here (no matching simulator runtime for actool), so test the 26.2 and 26.4 SDKs.
-        xcode: ["26.2", "26.4"]
+        xcode: ["26.2", "26.3", "26.4"]
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode ${{ matrix.xcode }}
@@ -51,9 +51,39 @@ jobs:
             -skipMacroValidation \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
-            OTHER_SWIFT_FLAGS='$(inherited) -continue-building-after-errors' \
+            OTHER_SWIFT_FLAGS='$(inherited) -continue-building-after-errors -Xfrontend -warn-long-expression-type-checking=150 -Xfrontend -warn-long-function-bodies=300' \
             build 2>&1 | tee device-build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | sort -u | head -200 || true
           grep -q "BUILD SUCCEEDED" device-build.log
+      - name: Slowest expressions to type-check (risk on older compilers)
+        if: always()
+        working-directory: Jarvis.swiftpm
+        run: |
+          grep -E "took [0-9]+ms to type-check" device-build.log | sed -E 's/^.*Sources\///' | sort -u \
+            | awk -F'took ' '{ split($2, a, "ms"); print a[1] "ms  " $0 }' | sort -rn | head -40 || true
+      - name: Expansion of @Generable (reference for macro-free code)
+        if: matrix.xcode == '26.2'
+        run: |
+          mkdir -p "$RUNNER_TEMP/gen" && cd "$RUNNER_TEMP/gen"
+          cat > demo.swift <<'SWIFT'
+          import FoundationModels
+          @Generable
+          struct Demo {
+              @Guide(description: "reply text")
+              var reply: String
+              @Guide(description: "options", .maximumCount(3))
+              var options: [String]
+              @Guide(description: "minutes")
+              var minutes: Int
+              @Guide(description: "x")
+              var x: Double
+          }
+          @Generable
+          struct Outer {
+              @Guide(description: "parts", .maximumCount(24))
+              var parts: [Demo]
+          }
+          SWIFT
+          xcrun --sdk iphoneos swiftc -target arm64-apple-ios26.0 -typecheck -Xfrontend -dump-macro-expansions demo.swift 2>&1 | head -250 || true
       - name: Device build warnings
         if: always()
         working-directory: Jarvis.swiftpm

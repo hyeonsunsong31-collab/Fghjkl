@@ -80,61 +80,90 @@ final class PresenceManager: NSObject, AVPictureInPictureControllerDelegate, AVP
 
     private func renderFrame() {
         frameIndex += 1
-        Self.pausedFlag = JarvisController.shared.micMuted
         let jarvis = JarvisController.shared
+        Self.pausedFlag = jarvis.micMuted
+        let state = HologramFrameState(phase: jarvis.phase, micMuted: jarvis.micMuted, isAwake: jarvis.isAwake,
+                                       inputLevel: CGFloat(jarvis.inputLevel), time: CGFloat(frameIndex) * 0.2)
         let size = CGSize(width: 480, height: 270)
-        let t = Double(frameIndex) * 0.2
         let renderer = UIGraphicsImageRenderer(size: size)
-        let image = renderer.image { ctx in
-            let cg = ctx.cgContext
-            UIColor(red: 0.01, green: 0.03, blue: 0.08, alpha: 1).setFill()
-            cg.fill(CGRect(origin: .zero, size: size))
-            let center = CGPoint(x: 120, y: size.height / 2)
-            let color: UIColor = {
-                switch jarvis.phase {
-                case .asleep: return UIColor(white: 0.75, alpha: 0.8)
-                case .listening: return UIColor(red: 0, green: 0.9, blue: 1, alpha: 1)
-                case .thinking: return UIColor(red: 1, green: 0.72, blue: 0.25, alpha: 1)
-                case .speaking: return .white
-                }
-            }()
-            cg.setLineCap(.round)
-            for (i, radius) in [90.0, 72.0, 56.0].enumerated() {
-                let segments = [6, 18, 3][i]
-                let speed = [0.4, -0.7, 1.2][i]
-                for s in 0..<segments {
-                    let start = Double(s) / Double(segments) * 2 * .pi + t * speed
-                    let end = start + (2 * .pi / Double(segments)) * 0.65
-                    cg.setStrokeColor(color.withAlphaComponent(0.85).cgColor)
-                    cg.setLineWidth(i == 2 ? 6 : 3)
-                    cg.addArc(center: center, radius: radius, startAngle: start, endAngle: end, clockwise: false)
-                    cg.strokePath()
-                }
-            }
-            let inner = 30 + 6 * sin(t * 2) + CGFloat(jarvis.inputLevel) * 18
-            let colors = [UIColor.white.cgColor, color.cgColor, color.withAlphaComponent(0).cgColor] as CFArray
-            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.5, 1]) {
-                cg.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: inner * 1.8, options: [])
-            }
-            let title = NSAttributedString(string: "J.A.R.V.I.S", attributes: [
-                .font: UIFont.monospacedSystemFont(ofSize: 26, weight: .bold), .foregroundColor: color])
-            title.draw(at: CGPoint(x: 240, y: 70))
-            let status: String
-            switch jarvis.phase {
-            case .asleep: status = jarvis.micMuted ? "MIC OFF" : "STANDBY"
-            case .listening: status = "LISTENING"
-            case .thinking: status = "THINKING"
-            case .speaking: status = "SPEAKING"
-            }
-            NSAttributedString(string: status, attributes: [.font: UIFont.monospacedSystemFont(ofSize: 18, weight: .semibold),
-                                                            .foregroundColor: UIColor(white: 0.9, alpha: 1)]).draw(at: CGPoint(x: 240, y: 112))
-            let hint = jarvis.isAwake ? "▶︎/❚❚ mic · ⤢ open" : "say “Wake up Jarvis”"
-            NSAttributedString(string: hint, attributes: [.font: UIFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-                                                          .foregroundColor: UIColor(red: 0.7, green: 0.95, blue: 1, alpha: 0.8)]).draw(at: CGPoint(x: 240, y: 150))
+        let image: UIImage = renderer.image { (ctx: UIGraphicsImageRendererContext) in
+            Self.drawHologram(in: ctx.cgContext, size: size, state: state)
         }
         if let buffer = Self.sampleBuffer(from: image) {
             displayLayer.sampleBufferRenderer.enqueue(buffer)
         }
+    }
+
+    /// Everything the PiP frame shows (kept as plain values so drawing needs no actor hops).
+    private struct HologramFrameState {
+        let phase: AssistantPhase
+        let micMuted: Bool
+        let isAwake: Bool
+        let inputLevel: CGFloat
+        let time: CGFloat
+    }
+
+    private static func phaseColor(_ phase: AssistantPhase) -> UIColor {
+        switch phase {
+        case .asleep: return UIColor(white: 0.75, alpha: 0.8)
+        case .listening: return UIColor(red: 0, green: 0.9, blue: 1, alpha: 1)
+        case .thinking: return UIColor(red: 1, green: 0.72, blue: 0.25, alpha: 1)
+        case .speaking: return UIColor.white
+        }
+    }
+
+    private static func statusText(_ state: HologramFrameState) -> String {
+        switch state.phase {
+        case .asleep: return state.micMuted ? "MIC OFF" : "STANDBY"
+        case .listening: return "LISTENING"
+        case .thinking: return "THINKING"
+        case .speaking: return "SPEAKING"
+        }
+    }
+
+    // Small, explicitly typed statements: older Swift compilers (such as the one in
+    // Swift Playground) time out type-checking one big drawing closure.
+    private static func drawHologram(in cg: CGContext, size: CGSize, state: HologramFrameState) {
+        UIColor(red: 0.01, green: 0.03, blue: 0.08, alpha: 1).setFill()
+        cg.fill(CGRect(origin: .zero, size: size))
+        let center = CGPoint(x: 120, y: size.height / 2)
+        let color: UIColor = phaseColor(state.phase)
+        cg.setLineCap(.round)
+        let radii: [CGFloat] = [90, 72, 56]
+        let segmentCounts: [Int] = [6, 18, 3]
+        let speeds: [CGFloat] = [0.4, -0.7, 1.2]
+        let ringColor: CGColor = color.withAlphaComponent(0.85).cgColor
+        for ring in 0..<radii.count {
+            let segments: Int = segmentCounts[ring]
+            let arcLength: CGFloat = (2 * CGFloat.pi / CGFloat(segments)) * 0.65
+            cg.setLineWidth(ring == 2 ? 6 : 3)
+            for segment in 0..<segments {
+                let fraction: CGFloat = CGFloat(segment) / CGFloat(segments)
+                let start: CGFloat = fraction * 2 * CGFloat.pi + state.time * speeds[ring]
+                cg.setStrokeColor(ringColor)
+                cg.addArc(center: center, radius: radii[ring], startAngle: start, endAngle: start + arcLength, clockwise: false)
+                cg.strokePath()
+            }
+        }
+        let pulse: CGFloat = 6 * sin(state.time * 2)
+        let inner: CGFloat = 30 + pulse + state.inputLevel * 18
+        let gradientColors: [CGColor] = [UIColor.white.cgColor, color.cgColor, color.withAlphaComponent(0).cgColor]
+        let locations: [CGFloat] = [0, 0.5, 1]
+        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: gradientColors as CFArray, locations: locations) {
+            cg.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: inner * 1.8, options: [])
+        }
+        drawText("J.A.R.V.I.S", size: 26, weight: .bold, color: color, at: CGPoint(x: 240, y: 70))
+        drawText(statusText(state), size: 18, weight: .semibold, color: UIColor(white: 0.9, alpha: 1), at: CGPoint(x: 240, y: 112))
+        let hint: String = state.isAwake ? "\u{25B6}\u{FE0E}/\u{275A}\u{275A} mic \u{00B7} \u{2922} open" : "say \u{201C}Wake up Jarvis\u{201D}"
+        drawText(hint, size: 13, weight: .regular, color: UIColor(red: 0.7, green: 0.95, blue: 1, alpha: 0.8), at: CGPoint(x: 240, y: 150))
+    }
+
+    private static func drawText(_ text: String, size: CGFloat, weight: UIFont.Weight, color: UIColor, at point: CGPoint) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.monospacedSystemFont(ofSize: size, weight: weight),
+            .foregroundColor: color,
+        ]
+        NSAttributedString(string: text, attributes: attributes).draw(at: point)
     }
 
     private static func sampleBuffer(from image: UIImage) -> CMSampleBuffer? {

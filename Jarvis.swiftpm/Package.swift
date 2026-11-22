@@ -60,5 +60,6 @@ let package = Package(
                 .process("Resources")
             ]
         )
-    ]
+    ],
+    swiftLanguageVersions: [.v5]
 )
