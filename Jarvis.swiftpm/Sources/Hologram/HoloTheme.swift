@@ -82,64 +82,95 @@ struct HoloButton: View {
     let action: () -> Void
     @State private var pressed = false
 
+    // Style values are precomputed so the body stays cheap to type-check.
+    private var iconSize: CGFloat { compact ? 16 : 20 }
+    private var labelSize: CGFloat { compact ? 9 : 10 }
+    private var glowColor: Color { active ? tint : tint.opacity(0.5) }
+    private var glowRadius: CGFloat { active ? 10 : 4 }
+    private var foreground: Color { active ? tint : Holo.ice.opacity(0.9) }
+    private var fillColor: Color { active ? tint.opacity(0.18) : Color.white.opacity(0.03) }
+    private var strokeColor: Color { active ? tint.opacity(0.9) : tint.opacity(0.28) }
+    private var strokeWidth: CGFloat { active ? 1.4 : 1 }
+
     var body: some View {
-        Button(action: {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            action()
-        }) {
-            VStack(spacing: compact ? 3 : 6) {
-                Image(systemName: icon)
-                    .font(.system(size: compact ? 16 : 20, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .holoGlow(active ? tint : tint.opacity(0.5), radius: active ? 10 : 4)
-                if !label.isEmpty {
-                    Text(label)
-                        .font(Holo.mono(compact ? 9 : 10, .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                }
+        Button(action: tap) { content }
+            .buttonStyle(.plain)
+            .simultaneousGesture(pressGesture)
+            .hoverEffect(.highlight)
+            .accessibilityLabel(label.isEmpty ? icon : label)
+    }
+
+    private func tap() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        action()
+    }
+
+    private var pressGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { _ in pressed = true }
+            .onEnded { _ in pressed = false }
+    }
+
+    private var content: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return VStack(spacing: compact ? 3 : 6) {
+            Image(systemName: icon)
+                .font(.system(size: iconSize, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .holoGlow(glowColor, radius: glowRadius)
+            if !label.isEmpty {
+                Text(label)
+                    .font(Holo.mono(labelSize, .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-            .foregroundStyle(active ? tint : Holo.ice.opacity(0.9))
-            .frame(minWidth: compact ? 52 : 64, minHeight: compact ? 46 : 58)
-            .padding(.horizontal, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(active ? tint.opacity(0.18) : Color.white.opacity(0.03))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(active ? tint.opacity(0.9) : tint.opacity(0.28), lineWidth: active ? 1.4 : 1)
-            )
-            .scaleEffect(pressed ? 0.94 : 1)
         }
-        .buttonStyle(.plain)
-        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in pressed = true }.onEnded { _ in pressed = false })
-        .hoverEffect(.highlight)
-        .accessibilityLabel(label.isEmpty ? icon : label)
+        .foregroundStyle(foreground)
+        .frame(minWidth: compact ? 52 : 64, minHeight: compact ? 46 : 58)
+        .padding(.horizontal, 6)
+        .background(shape.fill(fillColor))
+        .overlay(shape.strokeBorder(strokeColor, lineWidth: strokeWidth))
+        .scaleEffect(pressed ? 0.94 : 1)
     }
 }
 
 /// Animated scanlines + subtle flicker overlay.
 struct Scanlines: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            Canvas { ctx, size in
-                let spacing: CGFloat = 3
-                var y: CGFloat = CGFloat((t * 12).truncatingRemainder(dividingBy: Double(spacing)))
-                while y < size.height {
-                    ctx.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)), with: .color(Holo.cyan.opacity(0.035)))
-                    y += spacing
-                }
-                // A slow bright sweep.
-                let sweep = CGFloat((t * 0.25).truncatingRemainder(dividingBy: 1)) * (size.height + 200) - 100
-                let rect = CGRect(x: 0, y: sweep, width: size.width, height: 90)
-                ctx.fill(Path(rect), with: .linearGradient(Gradient(colors: [.clear, Holo.cyan.opacity(0.05), .clear]),
-                                                          startPoint: CGPoint(x: 0, y: rect.minY), endPoint: CGPoint(x: 0, y: rect.maxY)))
-            }
+        TimelineView(.animation(minimumInterval: 1 / 30)) { (context: TimelineViewDefaultContext) in
+            ScanlinesCanvas(time: context.date.timeIntervalSinceReferenceDate)
         }
         .allowsHitTesting(false)
         .blendMode(.plusLighter)
+    }
+}
+
+private struct ScanlinesCanvas: View {
+    let time: TimeInterval
+
+    var body: some View {
+        Canvas { (ctx: inout GraphicsContext, size: CGSize) in
+            ScanlinesCanvas.draw(in: &ctx, size: size, time: time)
+        }
+    }
+
+    static func draw(in ctx: inout GraphicsContext, size: CGSize, time: TimeInterval) {
+        let spacing: CGFloat = 3
+        let lineShading = GraphicsContext.Shading.color(Holo.cyan.opacity(0.035))
+        var y: CGFloat = CGFloat((time * 12).truncatingRemainder(dividingBy: Double(spacing)))
+        while y < size.height {
+            ctx.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)), with: lineShading)
+            y += spacing
+        }
+        // A slow bright sweep.
+        let progress: CGFloat = CGFloat((time * 0.25).truncatingRemainder(dividingBy: 1))
+        let sweep: CGFloat = progress * (size.height + 200) - 100
+        let rect = CGRect(x: 0, y: sweep, width: size.width, height: 90)
+        let colors: [Color] = [Color.clear, Holo.cyan.opacity(0.05), Color.clear]
+        let shading = GraphicsContext.Shading.linearGradient(Gradient(colors: colors),
+                                                             startPoint: CGPoint(x: 0, y: rect.minY),
+                                                             endPoint: CGPoint(x: 0, y: rect.maxY))
+        ctx.fill(Path(rect), with: shading)
     }
 }
 
