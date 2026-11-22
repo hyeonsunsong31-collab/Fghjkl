@@ -7,86 +7,136 @@ struct SettingsPanel: View {
     @State private var showGuide = false
     private var ko: Bool { jarvis.currentLanguage == .korean }
 
+    // Each section is its own small view property so the body type-checks quickly
+    // with the Swift compiler bundled in Swift Playground.
     var body: some View {
         PanelContainer(title: ko ? "설정" : "Settings", icon: "gearshape.fill", close: { jarvis.showPanel(nil) }) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    group(ko ? "언어" : "Language") {
-                        Picker("", selection: Binding(get: { jarvis.languageMode }, set: { jarvis.setLanguageMode($0) })) {
-                            Text(ko ? "자동 (입력 언어 따라)" : "Automatic").tag(LanguageMode.auto)
-                            Text("한국어").tag(LanguageMode.korean)
-                            Text("English").tag(LanguageMode.english)
-                        }
-                        .pickerStyle(.segmented)
-                    }
-
-                    group(ko ? "영국 신사 음성 (Kokoro 뉴럴)" : "British gentleman voice (Kokoro neural)") {
-                        Text(jarvis.kokoroStatus).font(Holo.mono(11)).foregroundStyle(Holo.ice.opacity(0.8))
-                        if let p = jarvis.kokoroProgress { ProgressView(value: p).tint(Holo.cyan) }
-                        HStack {
-                            ForEach(KokoroEngine.britishVoices, id: \.self) { v in
-                                Button(v.replacingOccurrences(of: "bm_", with: "").capitalized) { jarvis.setEnglishVoice(v); jarvis.speech.speak("Good evening, sir. This is my voice.", language: .english) }
-                                    .font(Holo.mono(11, .bold))
-                                    .foregroundStyle(jarvis.englishVoice == v ? Holo.deep : Holo.cyan)
-                                    .padding(.horizontal, 10).padding(.vertical, 6)
-                                    .background(Capsule().fill(jarvis.englishVoice == v ? Holo.cyan : Holo.cyan.opacity(0.12)))
-                            }
-                        }
-                        if !KokoroEngine.isInstalled && jarvis.kokoroProgress == nil {
-                            Button(ko ? "Kokoro 음성 내려받기 (약 95MB, 1회)" : "Download Kokoro voice (~95 MB, once)") { jarvis.installKokoro() }
-                                .buttonStyle(.borderedProminent).tint(Holo.cyan)
-                        }
-                        Text((ko ? "한국어 음성: " : "Korean voice: ") + SpeechOutputService.voiceSummary(for: .korean)
-                             + (ko ? " · 영어 시스템 대체 음성: " : " · English fallback: ") + SpeechOutputService.voiceSummary(for: .english))
-                            .font(Holo.mono(10)).foregroundStyle(Holo.ice.opacity(0.6))
-                        Text(ko ? "더 자연스러운 한국어 남성 음성은 설정 › 손쉬운 사용 › 음성 콘텐츠 › 음성에서 '고품질' 음성을 내려받으면 자동 적용됩니다."
-                                : "Higher-quality system voices can be downloaded in Settings › Accessibility › Spoken Content › Voices.")
-                            .font(.system(size: 11, design: .rounded)).foregroundStyle(Holo.ice.opacity(0.6))
-                    }
-
-                    group(ko ? "언어 모델" : "Language models") {
-                        Label(jarvis.appleFM.isAvailable ? (ko ? "Apple Intelligence: 사용 가능" : "Apple Intelligence: available")
-                                                         : "Apple Intelligence: " + (jarvis.appleFM.unavailableReason ?? "—"),
-                              systemImage: jarvis.appleFM.isAvailable ? "checkmark.seal.fill" : "exclamationmark.triangle")
-                            .font(Holo.mono(11)).foregroundStyle(jarvis.appleFM.isAvailable ? Holo.green : Holo.amber)
-                        Text((ko ? "심층 사고 모델: " : "Deep-Think model: ") + jarvis.deepThink.statusText)
-                            .font(Holo.mono(11)).foregroundStyle(Holo.ice.opacity(0.8))
-                        if let p = jarvis.deepThink.progress { ProgressView(value: p).tint(Holo.amber) }
-                        if !jarvis.deepThink.isInstalled && jarvis.deepThink.progress == nil {
-                            Button(ko ? "심층 사고 모델 내려받기 (\(jarvis.deepThink.recommendedVariant.sizeText), 1회)" : "Download Deep-Think model (\(jarvis.deepThink.recommendedVariant.sizeText), once)") {
-                                jarvis.deepThink.install()
-                            }
-                            .buttonStyle(.borderedProminent).tint(Holo.amber)
-                        }
-                        Toggle(ko ? "심층 사고 모드" : "Deep-think mode", isOn: Binding(get: { jarvis.deepThinkEnabled }, set: { jarvis.deepThinkEnabled = $0 && jarvis.deepThink.isAvailable }))
-                            .tint(Holo.amber)
-                    }
-
-                    group(ko ? "상주·백그라운드" : "Presence") {
-                        HStack {
-                            Text(ko ? "대화 후 대기 전환까지" : "Return to standby after").font(.system(size: 13))
-                            Slider(value: $idleMinutes, in: 1...60, step: 1) { _ in jarvis.records.setSetting("idleMinutes", String(Int(idleMinutes))) }
-                            Text("\(Int(idleMinutes))\(ko ? "분" : " min")").font(Holo.mono(11))
-                        }
-                        Toggle(ko ? "앱 밖에서 떠 있는 홀로그램(PiP)" : "Floating hologram outside the app (PiP)",
-                               isOn: Binding(get: { PresenceManager.shared.pipEnabled }, set: { PresenceManager.shared.pipEnabled = $0 }))
-                            .tint(Holo.cyan)
-                        Button(ko ? "앱 밖 웨이크·자동 실행 설정 가이드" : "Wake & auto-start setup guide") { showGuide = true }
-                            .foregroundStyle(Holo.cyan)
-                    }
-
-                    group(ko ? "권한" : "Permissions") {
-                        Button(ko ? "iOS 설정에서 Jarvis 권한 열기" : "Open Jarvis permissions in iOS Settings") {
-                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                        }
-                        .foregroundStyle(Holo.cyan)
-                    }
+                    languageSection
+                    voiceSection
+                    modelSection
+                    presenceSection
+                    permissionSection
                 }
                 .foregroundStyle(.white)
             }
         }
         .onAppear { idleMinutes = Double(jarvis.records.setting("idleMinutes") ?? "5") ?? 5 }
         .sheet(isPresented: $showGuide) { SetupGuideView().environment(jarvis) }
+    }
+
+    private var languageBinding: Binding<LanguageMode> {
+        Binding(get: { jarvis.languageMode }, set: { jarvis.setLanguageMode($0) })
+    }
+
+    private var languageSection: some View {
+        group(ko ? "언어" : "Language") {
+            Picker("", selection: languageBinding) {
+                Text(ko ? "자동 (입력 언어 따라)" : "Automatic").tag(LanguageMode.auto)
+                Text("한국어").tag(LanguageMode.korean)
+                Text("English").tag(LanguageMode.english)
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private var voiceSummary: String {
+        let korean: String = SpeechOutputService.voiceSummary(for: .korean)
+        let english: String = SpeechOutputService.voiceSummary(for: .english)
+        return ko ? "한국어 음성: \(korean) · 영어 시스템 대체 음성: \(english)" : "Korean voice: \(korean) · English fallback: \(english)"
+    }
+
+    private var voiceSection: some View {
+        group(ko ? "영국 신사 음성 (Kokoro 뉴럴)" : "British gentleman voice (Kokoro neural)") {
+            Text(jarvis.kokoroStatus).font(Holo.mono(11)).foregroundStyle(Holo.ice.opacity(0.8))
+            if let p = jarvis.kokoroProgress { ProgressView(value: p).tint(Holo.cyan) }
+            HStack {
+                ForEach(KokoroEngine.britishVoices, id: \.self) { (voice: String) in
+                    voiceButton(voice)
+                }
+            }
+            if !KokoroEngine.isInstalled && jarvis.kokoroProgress == nil {
+                Button(ko ? "Kokoro 음성 내려받기 (약 95MB, 1회)" : "Download Kokoro voice (~95 MB, once)") { jarvis.installKokoro() }
+                    .buttonStyle(.borderedProminent).tint(Holo.cyan)
+            }
+            Text(voiceSummary).font(Holo.mono(10)).foregroundStyle(Holo.ice.opacity(0.6))
+            Text(ko ? "더 자연스러운 한국어 남성 음성은 설정 › 손쉬운 사용 › 음성 콘텐츠 › 음성에서 '고품질' 음성을 내려받으면 자동 적용됩니다."
+                    : "Higher-quality system voices can be downloaded in Settings › Accessibility › Spoken Content › Voices.")
+                .font(.system(size: 11, design: .rounded)).foregroundStyle(Holo.ice.opacity(0.6))
+        }
+    }
+
+    private func voiceButton(_ voice: String) -> some View {
+        let selected: Bool = jarvis.englishVoice == voice
+        let title: String = voice.replacingOccurrences(of: "bm_", with: "").capitalized
+        return Button(title) {
+            jarvis.setEnglishVoice(voice)
+            jarvis.speech.speak("Good evening, sir. This is my voice.", language: .english)
+        }
+        .font(Holo.mono(11, .bold))
+        .foregroundStyle(selected ? Holo.deep : Holo.cyan)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Capsule().fill(selected ? Holo.cyan : Holo.cyan.opacity(0.12)))
+    }
+
+    private var appleIntelligenceLabel: some View {
+        let available: Bool = jarvis.appleFM.isAvailable
+        let text: String = available
+            ? (ko ? "Apple Intelligence: 사용 가능" : "Apple Intelligence: available")
+            : "Apple Intelligence: " + (jarvis.appleFM.unavailableReason ?? "—")
+        return Label(text, systemImage: available ? "checkmark.seal.fill" : "exclamationmark.triangle")
+            .font(Holo.mono(11))
+            .foregroundStyle(available ? Holo.green : Holo.amber)
+    }
+
+    private var deepThinkBinding: Binding<Bool> {
+        Binding(get: { jarvis.deepThinkEnabled }, set: { jarvis.deepThinkEnabled = $0 && jarvis.deepThink.isAvailable })
+    }
+
+    private var modelSection: some View {
+        let size: String = jarvis.deepThink.recommendedVariant.sizeText
+        let downloadTitle: String = ko ? "심층 사고 모델 내려받기 (\(size), 1회)" : "Download Deep-Think model (\(size), once)"
+        let status: String = (ko ? "심층 사고 모델: " : "Deep-Think model: ") + jarvis.deepThink.statusText
+        return group(ko ? "언어 모델" : "Language models") {
+            appleIntelligenceLabel
+            Text(status).font(Holo.mono(11)).foregroundStyle(Holo.ice.opacity(0.8))
+            if let p = jarvis.deepThink.progress { ProgressView(value: p).tint(Holo.amber) }
+            if !jarvis.deepThink.isInstalled && jarvis.deepThink.progress == nil {
+                Button(downloadTitle) { jarvis.deepThink.install() }
+                    .buttonStyle(.borderedProminent).tint(Holo.amber)
+            }
+            Toggle(ko ? "심층 사고 모드" : "Deep-think mode", isOn: deepThinkBinding)
+                .tint(Holo.amber)
+        }
+    }
+
+    private var pipBinding: Binding<Bool> {
+        Binding(get: { PresenceManager.shared.pipEnabled }, set: { PresenceManager.shared.pipEnabled = $0 })
+    }
+
+    private var presenceSection: some View {
+        let minutes: String = "\(Int(idleMinutes))" + (ko ? "분" : " min")
+        return group(ko ? "상주·백그라운드" : "Presence") {
+            HStack {
+                Text(ko ? "대화 후 대기 전환까지" : "Return to standby after").font(.system(size: 13))
+                Slider(value: $idleMinutes, in: 1...60, step: 1) { _ in jarvis.records.setSetting("idleMinutes", String(Int(idleMinutes))) }
+                Text(minutes).font(Holo.mono(11))
+            }
+            Toggle(ko ? "앱 밖에서 떠 있는 홀로그램(PiP)" : "Floating hologram outside the app (PiP)", isOn: pipBinding)
+                .tint(Holo.cyan)
+            Button(ko ? "앱 밖 웨이크·자동 실행 설정 가이드" : "Wake & auto-start setup guide") { showGuide = true }
+                .foregroundStyle(Holo.cyan)
+        }
+    }
+
+    private var permissionSection: some View {
+        group(ko ? "권한" : "Permissions") {
+            Button(ko ? "iOS 설정에서 Jarvis 권한 열기" : "Open Jarvis permissions in iOS Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }
+            .foregroundStyle(Holo.cyan)
+        }
     }
 
     private func group<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
