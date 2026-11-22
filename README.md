@@ -62,7 +62,7 @@ docs/                           아키텍처·설정·단축어·제약 문서
 swift test          # 67개 단위 테스트 (신경 코어, 문법, G2P, 3D, Qwen3 런타임 vs NumPy·HF 참조)
 ```
 
-GitHub Actions가 매 커밋마다 리눅스·macOS 단위 테스트, iOS 시뮬레이터용 전체 앱 빌드(Xcode 26), iPad 시뮬레이터 실행 테스트를 수행합니다. 실행 테스트는 첫 화면(온보딩)을 캡처한 뒤, 앱에 실제 명령 4개("open the 3D space" → "make three red cubes" → "clone it twice" → "파란 구 만들어줘")를 입력해 문법 → 신경 코어 → 실행기 → RealityKit 3D 장면까지 끝까지 동작하는지 로그와 스크린샷으로 확인합니다(실행 인수 `-JarvisScript "명령1 || 명령2"`).
+GitHub Actions가 매 커밋마다 리눅스·macOS 단위 테스트, **Swift Playground 4.7과 같은 세대의 컴파일러(Xcode 26.2·26.3·26.4, Swift 6.2.x)로 실기기용 빌드**, 최신 Xcode로 iOS 시뮬레이터용 빌드, iPad 시뮬레이터 실행 테스트를 수행합니다. 실행 테스트는 첫 화면(온보딩)을 캡처한 뒤, 앱에 실제 명령 4개("open the 3D space" → "make three red cubes" → "clone it twice" → "파란 구 만들어줘")를 입력해 문법 → 신경 코어 → 실행기 → RealityKit 3D 장면까지 끝까지 동작하는지 로그와 스크린샷으로 확인합니다(실행 인수 `-JarvisScript "명령1 || 명령2"`).
 
 ## 사용한 공개 모델·데이터 (모두 기기에 1회 다운로드)
 
