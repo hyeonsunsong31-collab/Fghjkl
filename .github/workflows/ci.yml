@@ -25,23 +25,19 @@ jobs:
         run: swift test --parallel
 
   playground-like-build:
-    name: Device build with every Xcode 26 (Swift Playground-like SDKs)
+    name: Device build with Xcode ${{ matrix.xcode }} (Swift Playground-like SDK)
     runs-on: macos-26
     strategy:
       fail-fast: false
       matrix:
-        pick: [oldest, newest]
+        # Swift Playground 4.7 (March 2026) bundles an iOS 26 SDK of that era; Xcode 26.0 cannot
+        # build here (no matching simulator runtime for actool), so test the 26.2 and 26.4 SDKs.
+        xcode: ["26.2", "26.4"]
     steps:
       - uses: actions/checkout@v4
-      - name: Select ${{ matrix.pick }} Xcode 26
+      - name: Select Xcode ${{ matrix.xcode }}
         run: |
-          ls -d /Applications/Xcode*.app
-          if [ "${{ matrix.pick }}" = "oldest" ]; then
-            XC=$(ls -d /Applications/Xcode_26*.app | grep -vi beta | sort -V | head -1)
-          else
-            XC=$(ls -d /Applications/Xcode_26*.app | grep -vi beta | sort -V | tail -1)
-          fi
-          sudo xcode-select -s "$XC"
+          sudo xcode-select -s "/Applications/Xcode_${{ matrix.xcode }}.app"
           xcodebuild -version
           swift --version
           echo "iOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
@@ -68,7 +64,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: device-build-${{ matrix.pick }}
+          name: device-build-xcode-${{ matrix.xcode }}
           path: Jarvis.swiftpm/device-build.log
 
   ios-app-build:
