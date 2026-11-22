@@ -24,6 +24,53 @@ jobs:
       - name: swift test
         run: swift test --parallel
 
+  playground-like-build:
+    name: Device build with every Xcode 26 (Swift Playground-like SDKs)
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        pick: [oldest, newest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select ${{ matrix.pick }} Xcode 26
+        run: |
+          ls -d /Applications/Xcode*.app
+          if [ "${{ matrix.pick }}" = "oldest" ]; then
+            XC=$(ls -d /Applications/Xcode_26*.app | grep -vi beta | sort -V | head -1)
+          else
+            XC=$(ls -d /Applications/Xcode_26*.app | grep -vi beta | sort -V | tail -1)
+          fi
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          swift --version
+          echo "iOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+      - name: Build for a real device (generic/platform=iOS), as Swift Playground does on iPad
+        working-directory: Jarvis.swiftpm
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -scheme Jarvis \
+            -destination 'generic/platform=iOS' \
+            -skipMacroValidation \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            OTHER_SWIFT_FLAGS='$(inherited) -continue-building-after-errors' \
+            build 2>&1 | tee device-build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | sort -u | head -200 || true
+          grep -q "BUILD SUCCEEDED" device-build.log
+      - name: Device build warnings
+        if: always()
+        working-directory: Jarvis.swiftpm
+        run: |
+          echo "warnings: $(grep -c 'warning:' device-build.log || true)"
+          grep -E 'warning:|error:' device-build.log | sed -E 's/^.*Sources\///' | sort -u | head -80 || true
+      - name: Upload device build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-build-${{ matrix.pick }}
+          path: Jarvis.swiftpm/device-build.log
+
   ios-app-build:
     name: Build Jarvis.swiftpm for iOS Simulator
     runs-on: macos-26
