@@ -44,93 +44,70 @@ struct HistoryPanel: View {
 
     var body: some View {
         PanelContainer(title: ko ? "전체 기록" : "Complete record", icon: "clock.arrow.circlepath", close: { jarvis.showPanel(nil) }) {
-            Text(ko ? "명령 \(stats.commands) · 작업 \(stats.runs) · 메시지 \(stats.messages) · 설명 \(stats.explanations) · 파일 \(stats.artifacts)"
-                    : "Commands \(stats.commands) · Runs \(stats.runs) · Messages \(stats.messages) · Explanations \(stats.explanations) · Files \(stats.artifacts)")
-                .font(Holo.mono(10)).foregroundStyle(Holo.ice.opacity(0.7))
-            Picker("", selection: $tab) {
-                Text(ko ? "대화" : "Conversation").tag(0)
-                Text(ko ? "작업" : "Tasks").tag(1)
-                Text(ko ? "파일" : "Files").tag(2)
-            }
-            .pickerStyle(.segmented)
-            if tab == 0 {
-                TextField(ko ? "검색" : "Search", text: $search)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(reload)
-            }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    switch tab {
-                    case 0:
-                        ForEach(messages) { m in
-                            VStack(alignment: .leading, spacing: 2) {
-                                HUDLabel(text: "\(m.role) · \(m.timestamp.formatted(date: .abbreviated, time: .standard))",
-                                         color: m.role == "user" ? Holo.amber : Holo.cyan, size: 8)
-                                Text(m.text).font(.system(size: 13, design: .rounded)).foregroundStyle(.white.opacity(0.9)).textSelection(.enabled)
-                            }
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.03)))
-                        }
-                    case 1:
-                        ForEach(runs) { r in
-                            Button { selectedRun = (selectedRun?.id == r.id) ? nil : r } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        Image(systemName: r.status == "succeeded" ? "checkmark.circle.fill" : (r.status == "running" ? "circle.dotted" : "xmark.octagon.fill"))
-                                            .foregroundStyle(r.status == "succeeded" ? Holo.green : (r.status == "running" ? Holo.amber : Holo.red))
-                                        Text(r.title).font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white).lineLimit(1)
-                                        Spacer()
-                                        Text(r.action).font(Holo.mono(9)).foregroundStyle(Holo.ice.opacity(0.6))
-                                    }
-                                    Text(String(format: ko ? "예상 %.1f초 · 실제 %.1f초 · %@" : "est. %.1fs · actual %.1fs · %@",
-                                                r.estimated ?? 0, r.actual ?? 0, r.start.formatted(date: .omitted, time: .standard)))
-                                        .font(Holo.mono(10)).foregroundStyle(Holo.ice.opacity(0.6))
-                                    if selectedRun?.id == r.id {
-                                        ForEach(Array(RecordKeeper.shared.explanations(for: r.id).enumerated()), id: \.offset) { _, e in
-                                            ExplanationCard(explanation: e, language: jarvis.currentLanguage)
-                                        }
-                                        if let err = r.error { Text(err).font(Holo.mono(10)).foregroundStyle(Holo.red) }
-                                    }
-                                }
-                                .padding(8)
-                                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.03)))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    default:
-                        ForEach(artifacts) { a in
-                            HStack {
-                                Image(systemName: "doc.fill").foregroundStyle(Holo.cyan)
-                                VStack(alignment: .leading) {
-                                    Text(a.path.components(separatedBy: "/").last ?? a.path).font(.system(size: 13, design: .rounded)).foregroundStyle(.white)
-                                    Text("\(a.description) · \(ByteCountFormatter.string(fromByteCount: Int64(a.size), countStyle: .file))")
-                                        .font(Holo.mono(9)).foregroundStyle(Holo.ice.opacity(0.6))
-                                }
-                                Spacer()
-                                ShareLink(item: JarvisPaths.documents.appendingPathComponent(a.path)) {
-                                    Image(systemName: "square.and.arrow.up").foregroundStyle(Holo.cyan)
-                                }
-                            }
-                            .padding(8)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.03)))
-                        }
-                    }
-                }
-            }
-            HStack {
-                Button(ko ? "대화 내보내기" : "Export transcript") { exportedURL = RecordKeeper.shared.exportTranscript(); reload() }
-                    .font(Holo.mono(11, .bold)).foregroundStyle(Holo.cyan)
-                if let url = exportedURL {
-                    ShareLink(item: url) { Label(ko ? "공유" : "Share", systemImage: "square.and.arrow.up") }
-                        .font(Holo.mono(11)).foregroundStyle(Holo.cyan)
-                }
-                Spacer()
-                Text(ko ? "파일 앱 › Jarvis 폴더에도 저장됩니다" : "Also saved in Files › Jarvis").font(Holo.mono(9)).foregroundStyle(Holo.ice.opacity(0.5))
-            }
+            statsLine
+            tabPicker
+            if tab == 0 { searchField }
+            ScrollView { recordList }
+            footer
         }
         .onAppear(perform: reload)
         .onChange(of: tab) { _, _ in reload() }
+    }
+
+    private var statsLine: some View {
+        let text: String = ko
+            ? "명령 \(stats.commands) · 작업 \(stats.runs) · 메시지 \(stats.messages) · 설명 \(stats.explanations) · 파일 \(stats.artifacts)"
+            : "Commands \(stats.commands) · Runs \(stats.runs) · Messages \(stats.messages) · Explanations \(stats.explanations) · Files \(stats.artifacts)"
+        return Text(text).font(Holo.mono(10)).foregroundStyle(Holo.ice.opacity(0.7))
+    }
+
+    private var tabPicker: some View {
+        Picker("", selection: $tab) {
+            Text(ko ? "대화" : "Conversation").tag(0)
+            Text(ko ? "작업" : "Tasks").tag(1)
+            Text(ko ? "파일" : "Files").tag(2)
+        }
+        .pickerStyle(.segmented)
+    }
+
+    private var searchField: some View {
+        TextField(ko ? "검색" : "Search", text: $search)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit(reload)
+    }
+
+    private var recordList: some View {
+        LazyVStack(alignment: .leading, spacing: 8) {
+            switch tab {
+            case 0:
+                ForEach(messages) { (m: RecordKeeper.MessageRecord) in
+                    HistoryMessageRow(message: m)
+                }
+            case 1:
+                ForEach(runs) { (r: RecordKeeper.RunRecord) in
+                    HistoryRunRow(run: r, expanded: selectedRun?.id == r.id, language: jarvis.currentLanguage) {
+                        selectedRun = (selectedRun?.id == r.id) ? nil : r
+                    }
+                }
+            default:
+                ForEach(artifacts) { (a: RecordKeeper.ArtifactRecord) in
+                    HistoryArtifactRow(artifact: a)
+                }
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Button(ko ? "대화 내보내기" : "Export transcript") { exportedURL = RecordKeeper.shared.exportTranscript(); reload() }
+                .font(Holo.mono(11, .bold)).foregroundStyle(Holo.cyan)
+            if let url = exportedURL {
+                ShareLink(item: url) { Label(ko ? "공유" : "Share", systemImage: "square.and.arrow.up") }
+                    .font(Holo.mono(11)).foregroundStyle(Holo.cyan)
+            }
+            Spacer()
+            Text(ko ? "파일 앱 › Jarvis 폴더에도 저장됩니다" : "Also saved in Files › Jarvis").font(Holo.mono(9)).foregroundStyle(Holo.ice.opacity(0.5))
+        }
     }
 
     private func reload() {
@@ -139,6 +116,106 @@ struct HistoryPanel: View {
         runs = r.recentRuns(limit: 100)
         artifacts = r.recentArtifacts(limit: 100)
         stats = r.stats()
+    }
+}
+
+// Rows of the history panel, kept as separate small views so each body type-checks quickly.
+
+private struct HistoryMessageRow: View {
+    let message: RecordKeeper.MessageRecord
+
+    var body: some View {
+        let isUser: Bool = message.role == "user"
+        let stamp: String = message.timestamp.formatted(date: .abbreviated, time: .standard)
+        return VStack(alignment: .leading, spacing: 2) {
+            HUDLabel(text: "\(message.role) · \(stamp)", color: isUser ? Holo.amber : Holo.cyan, size: 8)
+            Text(message.text)
+                .font(.system(size: 13, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+                .textSelection(.enabled)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.03)))
+    }
+}
+
+private struct HistoryRunRow: View {
+    let run: RecordKeeper.RunRecord
+    let expanded: Bool
+    let language: DetectedLanguage
+    let toggle: () -> Void
+
+    private var statusIcon: String {
+        switch run.status {
+        case "succeeded": return "checkmark.circle.fill"
+        case "running": return "circle.dotted"
+        default: return "xmark.octagon.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch run.status {
+        case "succeeded": return Holo.green
+        case "running": return Holo.amber
+        default: return Holo.red
+        }
+    }
+
+    private var timing: String {
+        let format: String = language == .korean ? "예상 %.1f초 · 실제 %.1f초 · %@" : "est. %.1fs · actual %.1fs · %@"
+        let start: String = run.start.formatted(date: .omitted, time: .standard)
+        return String(format: format, run.estimated ?? 0, run.actual ?? 0, start)
+    }
+
+    var body: some View {
+        Button(action: toggle) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Image(systemName: statusIcon).foregroundStyle(statusColor)
+                    Text(run.title).font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white).lineLimit(1)
+                    Spacer()
+                    Text(run.action).font(Holo.mono(9)).foregroundStyle(Holo.ice.opacity(0.6))
+                }
+                Text(timing).font(Holo.mono(10)).foregroundStyle(Holo.ice.opacity(0.6))
+                if expanded { details }
+            }
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.03)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var details: some View {
+        let explanations: [Explanation] = RecordKeeper.shared.explanations(for: run.id)
+        ForEach(Array(explanations.enumerated()), id: \.offset) { (_: Int, e: Explanation) in
+            ExplanationCard(explanation: e, language: language)
+        }
+        if let err = run.error {
+            Text(err).font(Holo.mono(10)).foregroundStyle(Holo.red)
+        }
+    }
+}
+
+private struct HistoryArtifactRow: View {
+    let artifact: RecordKeeper.ArtifactRecord
+
+    var body: some View {
+        let fileName: String = artifact.path.components(separatedBy: "/").last ?? artifact.path
+        let size: String = ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file)
+        return HStack {
+            Image(systemName: "doc.fill").foregroundStyle(Holo.cyan)
+            VStack(alignment: .leading) {
+                Text(fileName).font(.system(size: 13, design: .rounded)).foregroundStyle(.white)
+                Text("\(artifact.description) · \(size)").font(Holo.mono(9)).foregroundStyle(Holo.ice.opacity(0.6))
+            }
+            Spacer()
+            ShareLink(item: JarvisPaths.documents.appendingPathComponent(artifact.path)) {
+                Image(systemName: "square.and.arrow.up").foregroundStyle(Holo.cyan)
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.03)))
     }
 }
 

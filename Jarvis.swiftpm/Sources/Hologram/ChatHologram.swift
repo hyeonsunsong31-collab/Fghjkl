@@ -46,49 +46,72 @@ struct ChatHologram: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
-            HoloIconToggle(icon: jarvis.micMuted ? "mic.slash.fill" : "mic.fill", active: !jarvis.micMuted,
-                           tint: jarvis.micMuted ? Holo.red : Holo.cyan,
-                           label: jarvis.micMuted ? "MIC OFF" : "MIC") {
-                jarvis.setMicMuted(!jarvis.micMuted)
-            }
-            HoloIconToggle(icon: jarvis.voiceMuted ? "speaker.slash.fill" : "speaker.wave.2.fill", active: !jarvis.voiceMuted,
-                           tint: jarvis.voiceMuted ? Holo.red : Holo.cyan,
-                           label: jarvis.voiceMuted ? "AI MUTED" : "VOICE") {
-                jarvis.setVoiceMuted(!jarvis.voiceMuted)
-            }
-            ZStack(alignment: .leading) {
-                if draft.isEmpty {
-                    Text(jarvis.currentLanguage == .korean ? "자비스에게 말하거나 입력하십시오…" : "Speak or type to Jarvis…")
-                        .font(Holo.mono(13))
-                        .foregroundStyle(Holo.ice.opacity(0.4))
-                }
-                TextField("", text: $draft, axis: .vertical)
-                    .font(Holo.mono(14))
-                    .foregroundStyle(.white)
-                    .lineLimit(1...4)
-                    .focused($focused)
-                    .submitLabel(.send)
-                    .onSubmit(send)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.35)))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Holo.cyan.opacity(focused ? 0.8 : 0.3)))
-
-            Button(action: send) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(draft.isEmpty ? Holo.ice.opacity(0.3) : Holo.cyan)
-                    .holoGlow(draft.isEmpty ? .clear : Holo.cyan, radius: 6)
-            }
-            .buttonStyle(.plain)
-            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-            .keyboardShortcut(.return, modifiers: .command)
-
+            micToggle
+            voiceToggle
+            inputField
+            sendButton
             HoloIconToggle(icon: "cube.transparent", active: jarvis.spaceOpen, tint: Holo.amber, label: "3D") {
                 jarvis.setSpaceOpen(!jarvis.spaceOpen)
             }
         }
+    }
+
+    private var micToggle: some View {
+        let muted: Bool = jarvis.micMuted
+        return HoloIconToggle(icon: muted ? "mic.slash.fill" : "mic.fill", active: !muted,
+                              tint: muted ? Holo.red : Holo.cyan, label: muted ? "MIC OFF" : "MIC") {
+            jarvis.setMicMuted(!muted)
+        }
+    }
+
+    private var voiceToggle: some View {
+        let muted: Bool = jarvis.voiceMuted
+        return HoloIconToggle(icon: muted ? "speaker.slash.fill" : "speaker.wave.2.fill", active: !muted,
+                              tint: muted ? Holo.red : Holo.cyan, label: muted ? "AI MUTED" : "VOICE") {
+            jarvis.setVoiceMuted(!muted)
+        }
+    }
+
+    private var placeholder: String {
+        jarvis.currentLanguage == .korean ? "자비스에게 말하거나 입력하십시오…" : "Speak or type to Jarvis…"
+    }
+
+    private var inputField: some View {
+        let border: Color = Holo.cyan.opacity(focused ? 0.8 : 0.3)
+        return ZStack(alignment: .leading) {
+            if draft.isEmpty {
+                Text(placeholder)
+                    .font(Holo.mono(13))
+                    .foregroundStyle(Holo.ice.opacity(0.4))
+            }
+            TextField("", text: $draft, axis: .vertical)
+                .font(Holo.mono(14))
+                .foregroundStyle(.white)
+                .lineLimit(1...4)
+                .focused($focused)
+                .submitLabel(.send)
+                .onSubmit(send)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.35)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(border))
+    }
+
+    private var sendButton: some View {
+        let empty: Bool = draft.isEmpty
+        let blank: Bool = draft.trimmingCharacters(in: .whitespaces).isEmpty
+        let tint: Color = empty ? Holo.ice.opacity(0.3) : Holo.cyan
+        let glow: Color = empty ? Color.clear : Holo.cyan
+        return Button(action: send) {
+            Image(systemName: "arrow.up.circle.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(tint)
+                .holoGlow(glow, radius: 6)
+        }
+        .buttonStyle(.plain)
+        .disabled(blank)
+        .keyboardShortcut(.return, modifiers: .command)
     }
 
     private func send() {

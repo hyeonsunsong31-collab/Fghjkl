@@ -146,39 +146,59 @@ struct Scanlines: View {
 /// Animated hexagonal grid backdrop (used when the 3D space is closed).
 struct HexBackdrop: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 20)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            Canvas { ctx, size in
-                ctx.fill(Path(CGRect(origin: .zero, size: size)),
-                         with: .radialGradient(Gradient(colors: [Color(red: 0.02, green: 0.10, blue: 0.20), Holo.deep]),
-                                               center: CGPoint(x: size.width / 2, y: size.height * 0.42), startRadius: 0,
-                                               endRadius: max(size.width, size.height) * 0.75))
-                let r: CGFloat = 26
-                let w = r * 1.732
-                var row = 0
-                var y: CGFloat = 0
-                while y < size.height + r {
-                    var x: CGFloat = row % 2 == 0 ? 0 : w / 2
-                    while x < size.width + w {
-                        let d = hypot(x - size.width / 2, y - size.height * 0.42)
-                        let pulse = 0.5 + 0.5 * sin(Double(d) / 60 - t * 1.4)
-                        let alpha = 0.025 + 0.06 * pulse * Double(max(0, 1 - d / (size.width * 0.8)))
-                        var hex = Path()
-                        for k in 0..<6 {
-                            let a = CGFloat(k) * .pi / 3 + .pi / 6
-                            let pt = CGPoint(x: x + r * 0.92 * cos(a), y: y + r * 0.92 * sin(a))
-                            if k == 0 { hex.move(to: pt) } else { hex.addLine(to: pt) }
-                        }
-                        hex.closeSubpath()
-                        ctx.stroke(hex, with: .color(Holo.cyan.opacity(alpha)), lineWidth: 1)
-                        x += w
-                    }
-                    y += r * 1.5
-                    row += 1
-                }
-            }
+        TimelineView(.animation(minimumInterval: 1 / 20)) { (context: TimelineViewDefaultContext) in
+            HexBackdropCanvas(time: CGFloat(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 100_000)))
         }
         .ignoresSafeArea()
+    }
+}
+
+/// Explicitly typed drawing (fast to type-check on Swift Playground's compiler).
+private struct HexBackdropCanvas: View {
+    let time: CGFloat
+
+    var body: some View {
+        Canvas { (ctx: inout GraphicsContext, size: CGSize) in
+            HexBackdropCanvas.draw(in: &ctx, size: size, time: time)
+        }
+    }
+
+    static func draw(in ctx: inout GraphicsContext, size: CGSize, time: CGFloat) {
+        let focus = CGPoint(x: size.width / 2, y: size.height * 0.42)
+        let background = Gradient(colors: [Color(red: 0.02, green: 0.10, blue: 0.20), Holo.deep])
+        let reach: CGFloat = max(size.width, size.height) * 0.75
+        ctx.fill(Path(CGRect(origin: .zero, size: size)),
+                 with: GraphicsContext.Shading.radialGradient(background, center: focus, startRadius: 0, endRadius: reach))
+        let r: CGFloat = 26
+        let w: CGFloat = r * 1.732
+        let falloff: CGFloat = size.width * 0.8
+        var row = 0
+        var y: CGFloat = 0
+        while y < size.height + r {
+            var x: CGFloat = row % 2 == 0 ? 0 : w / 2
+            while x < size.width + w {
+                let d: CGFloat = hypot(x - focus.x, y - focus.y)
+                let pulse: CGFloat = 0.5 + 0.5 * sin(d / 60 - time * 1.4)
+                let fade: CGFloat = max(0, 1 - d / falloff)
+                let alpha: Double = Double(0.025 + 0.06 * pulse * fade)
+                ctx.stroke(hexagon(center: CGPoint(x: x, y: y), radius: r * 0.92),
+                           with: GraphicsContext.Shading.color(Holo.cyan.opacity(alpha)), lineWidth: 1)
+                x += w
+            }
+            y += r * 1.5
+            row += 1
+        }
+    }
+
+    static func hexagon(center: CGPoint, radius: CGFloat) -> Path {
+        var hex = Path()
+        for k in 0..<6 {
+            let angle: CGFloat = CGFloat(k) * CGFloat.pi / 3 + CGFloat.pi / 6
+            let corner = CGPoint(x: center.x + radius * cos(angle), y: center.y + radius * sin(angle))
+            if k == 0 { hex.move(to: corner) } else { hex.addLine(to: corner) }
+        }
+        hex.closeSubpath()
+        return hex
     }
 }
 

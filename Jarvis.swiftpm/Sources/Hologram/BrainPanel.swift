@@ -37,42 +37,24 @@ struct BrainPanel: View {
     }
 
     private var cloud: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            let active = Set(jarvis.latticeSample)
-            Canvas { ctx, size in
-                let yaw = Float(baseRotation + Double(drag.width) * 0.01 + t * 0.15)
-                let pitch = Float(-0.25 + Double(drag.height) * 0.005)
-                let scale = Float(min(size.width, size.height)) * 0.36
-                let cy = cos(yaw), sy = sin(yaw), cp = cos(pitch), sp = sin(pitch)
-                for p in points {
-                    var v = p.position
-                    v = SIMD3(v.x * cy + v.z * sy, v.y, -v.x * sy + v.z * cy)
-                    v = SIMD3(v.x, v.y * cp - v.z * sp, v.y * sp + v.z * cp)
-                    let depth = 1 / (2.6 - v.z)
-                    let x = CGFloat(v.x * scale * depth * 2.2) + size.width / 2
-                    let y = CGFloat(-v.y * scale * depth * 2.2) + size.height / 2
-                    let isActive = active.contains(p.id)
-                    let r: CGFloat = isActive ? 3.2 : CGFloat(1.1 + depth)
-                    let color = Self.color(p.system).opacity(isActive ? 1 : Double(0.25 + depth * 0.5))
-                    ctx.fill(Path(ellipseIn: CGRect(x: x - r / 2, y: y - r / 2, width: r, height: r)), with: .color(color))
-                }
-                // Live spikes from the lattice simulator, projected near their region.
-                for (i, id) in jarvis.latticeSample.prefix(160).enumerated() {
-                    let region = Lattice3D.region(of: id)
-                    let base = Self.anatomical(Lattice3D.coordinate(id), region: region)
-                    var v = base
-                    v = SIMD3(v.x * cy + v.z * sy, v.y, -v.x * sy + v.z * cy)
-                    v = SIMD3(v.x, v.y * cp - v.z * sp, v.y * sp + v.z * cp)
-                    let depth = 1 / (2.6 - v.z)
-                    let x = CGFloat(v.x * scale * depth * 2.2) + size.width / 2
-                    let y = CGFloat(-v.y * scale * depth * 2.2) + size.height / 2
-                    let flicker = 0.5 + 0.5 * sin(t * 12 + Double(i))
-                    ctx.fill(Path(ellipseIn: CGRect(x: x - 2.5, y: y - 2.5, width: 5, height: 5)), with: .color(Color.white.opacity(flicker)))
-                }
-            }
-            .holoGlow(Holo.cyan, radius: 6)
+        TimelineView(.animation(minimumInterval: 1 / 30)) { (context: TimelineViewDefaultContext) in
+            BrainCloudCanvas(points: points,
+                             sample: jarvis.latticeSample,
+                             yaw: Self.yaw(base: baseRotation, drag: drag, time: context.date.timeIntervalSinceReferenceDate),
+                             pitch: Self.pitch(drag: drag),
+                             time: context.date.timeIntervalSinceReferenceDate)
         }
+    }
+
+    static func yaw(base: Double, drag: CGSize, time: TimeInterval) -> Float {
+        let dragTurn: Double = Double(drag.width) * 0.01
+        let spin: Double = time.truncatingRemainder(dividingBy: 10_000) * 0.15
+        return Float(base + dragTurn + spin)
+    }
+
+    static func pitch(drag: CGSize) -> Float {
+        let tilt: Double = Double(drag.height) * 0.005
+        return Float(-0.25 + tilt)
     }
 
     private var stats: some View {
@@ -198,5 +180,81 @@ struct BrainPanel: View {
         if d >= 1e9 { return String(format: "%.1fB", d / 1e9) }
         if d >= 1e6 { return String(format: "%.1fM", d / 1e6) }
         return n.formatted()
+    }
+}
+
+/// Renders the rotating brain point cloud (split out and explicitly typed so older
+/// Swift compilers, such as Swift Playground's, type-check it quickly).
+private struct BrainCloudCanvas: View {
+    let points: [BrainPanel.BrainPoint]
+    let sample: [NeuronID]
+    let yaw: Float
+    let pitch: Float
+    let time: TimeInterval
+
+    var body: some View {
+        Canvas { (ctx: inout GraphicsContext, size: CGSize) in
+            BrainCloudCanvas.draw(in: &ctx, size: size, cloud: self)
+        }
+        .holoGlow(Holo.cyan, radius: 6)
+    }
+
+    struct Projection {
+        let cosYaw: Float
+        let sinYaw: Float
+        let cosPitch: Float
+        let sinPitch: Float
+        let scale: Float
+        let center: CGPoint
+
+        init(yaw: Float, pitch: Float, size: CGSize) {
+            cosYaw = cos(yaw)
+            sinYaw = sin(yaw)
+            cosPitch = cos(pitch)
+            sinPitch = sin(pitch)
+            scale = Float(min(size.width, size.height)) * 0.36
+            center = CGPoint(x: size.width / 2, y: size.height / 2)
+        }
+
+        /// Screen point and perspective depth factor of a model-space position.
+        func project(_ p: SIMD3<Float>) -> (point: CGPoint, depth: Float) {
+            let x1: Float = p.x * cosYaw + p.z * sinYaw
+            let z1: Float = p.z * cosYaw - p.x * sinYaw
+            let y2: Float = p.y * cosPitch - z1 * sinPitch
+            let z2: Float = p.y * sinPitch + z1 * cosPitch
+            let depth: Float = 1 / (2.6 - z2)
+            let k: Float = scale * depth * 2.2
+            let screenX: CGFloat = CGFloat(x1 * k) + center.x
+            let screenY: CGFloat = center.y - CGFloat(y2 * k)
+            return (CGPoint(x: screenX, y: screenY), depth)
+        }
+    }
+
+    static func dot(_ center: CGPoint, diameter: CGFloat) -> Path {
+        Path(ellipseIn: CGRect(x: center.x - diameter / 2, y: center.y - diameter / 2, width: diameter, height: diameter))
+    }
+
+    static func draw(in ctx: inout GraphicsContext, size: CGSize, cloud: BrainCloudCanvas) {
+        let projection = Projection(yaw: cloud.yaw, pitch: cloud.pitch, size: size)
+        let active: Set<NeuronID> = Set(cloud.sample)
+        for p in cloud.points {
+            let projected = projection.project(p.position)
+            let isActive: Bool = active.contains(p.id)
+            let diameter: CGFloat = isActive ? 3.2 : CGFloat(1.1 + projected.depth)
+            let opacity: Double = isActive ? 1 : Double(0.25 + projected.depth * 0.5)
+            let color: Color = BrainPanel.color(p.system).opacity(opacity)
+            ctx.fill(dot(projected.point, diameter: diameter), with: GraphicsContext.Shading.color(color))
+        }
+        // Live spikes from the lattice simulator, projected near their region.
+        let spikes: ArraySlice<NeuronID> = cloud.sample.prefix(160)
+        var index: Double = 0
+        for id in spikes {
+            let region: BrainRegion = Lattice3D.region(of: id)
+            let position: SIMD3<Float> = BrainPanel.anatomical(Lattice3D.coordinate(id), region: region)
+            let projected = projection.project(position)
+            let flicker: Double = 0.5 + 0.5 * sin(cloud.time * 12 + index)
+            ctx.fill(dot(projected.point, diameter: 5), with: GraphicsContext.Shading.color(Color.white.opacity(flicker)))
+            index += 1
+        }
     }
 }

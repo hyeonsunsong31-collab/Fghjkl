@@ -215,55 +215,91 @@ final class NeuralG2P {
     var isAvailable: Bool { encoder != nil && decoder != nil && !graphemeToID.isEmpty }
 
     /// Greedy decoding; returns US-style misaki phonemes (converted to GB by the caller).
+    /// Written as small typed steps so older Swift compilers type-check it quickly.
     func convert(_ word: String) -> String? {
         guard let encoder, let decoder, word.count < 60 else { return nil }
-        var input: [Int32] = [1]
-        for ch in word {
-            let s = String(ch)
-            input.append(Int32(graphemeToID[s] ?? graphemeToID[s.lowercased()] ?? 3))
-        }
-        input.append(2)
         do {
-            let enc = try MLMultiArray(shape: [1, NSNumber(value: input.count)], dataType: .int32)
-            for (i, v) in input.enumerated() { enc[i] = NSNumber(value: v) }
-            let encOut = try encoder.prediction(from: MLDictionaryFeatureProvider(dictionary: ["input_ids": MLFeatureValue(multiArray: enc)]))
-            guard let hidden = encOut.featureValue(for: "encoder_hidden_states")?.multiArrayValue else { return nil }
+            let inputIDs: MLMultiArray = try Self.int32Array(graphemeIDs(word))
+            let encoderInputs: [String: MLFeatureValue] = ["input_ids": MLFeatureValue(multiArray: inputIDs)]
+            let encoded: MLFeatureProvider = try encoder.prediction(from: MLDictionaryFeatureProvider(dictionary: encoderInputs))
+            guard let hidden: MLMultiArray = encoded.featureValue(for: "encoder_hidden_states")?.multiArrayValue else { return nil }
             var decoded: [Int32] = [1]
             for _ in 0..<63 {
-                let n = decoded.count
-                let ids = try MLMultiArray(shape: [1, NSNumber(value: n)], dataType: .int32)
-                let pos = try MLMultiArray(shape: [1, NSNumber(value: n)], dataType: .int32)
-                let mask = try MLMultiArray(shape: [1, NSNumber(value: n), NSNumber(value: n)], dataType: .float32)
-                let mp = mask.dataPointer.assumingMemoryBound(to: Float.self)
-                for i in 0..<n {
-                    ids[i] = NSNumber(value: decoded[i])
-                    pos[i] = NSNumber(value: i)
-                    for j in 0..<n { mp[i * n + j] = j <= i ? 0 : -1e9 }
-                }
-                let out = try decoder.prediction(from: MLDictionaryFeatureProvider(dictionary: [
-                    "decoder_input_ids": MLFeatureValue(multiArray: ids),
-                    "encoder_hidden_states": MLFeatureValue(multiArray: hidden),
-                    "position_ids": MLFeatureValue(multiArray: pos),
-                    "causal_mask": MLFeatureValue(multiArray: mask),
-                ]))
-                guard let logits = out.featureValue(for: "logits")?.multiArrayValue,
-                      let vocabSize = logits.shape.last?.intValue, vocabSize > 0 else { break }
-                // Logits cover every decoder position ([1, n, V]) or only the last one ([1, 1, V]).
-                let positions = max(1, logits.count / vocabSize)
-                let offset = (min(n, positions) - 1) * vocabSize
-                var best = 0
-                var bestValue = -Float.infinity
-                for v in 0..<vocabSize {
-                    let value = logits[offset + v].floatValue
-                    if value > bestValue { bestValue = value; best = v }
-                }
-                if best == 2 { break }
-                decoded.append(Int32(best))
+                guard let next: Int = try nextToken(decoder: decoder, decoded: decoded, hidden: hidden), next != 2 else { break }
+                decoded.append(Int32(next))
             }
-            let phonemes = decoded.dropFirst().compactMap { idToPhoneme[Int($0)] }.filter { $0.count == 1 }.joined()
+            let phonemes: String = phonemeString(decoded)
             return phonemes.isEmpty ? nil : phonemes
         } catch {
             return nil
         }
+    }
+
+    private func graphemeIDs(_ word: String) -> [Int32] {
+        var ids: [Int32] = [1]
+        for ch in word {
+            let s = String(ch)
+            let id: Int = graphemeToID[s] ?? graphemeToID[s.lowercased()] ?? 3
+            ids.append(Int32(id))
+        }
+        ids.append(2)
+        return ids
+    }
+
+    private static func int32Array(_ values: [Int32]) throws -> MLMultiArray {
+        let array = try MLMultiArray(shape: [1, NSNumber(value: values.count)], dataType: .int32)
+        let pointer: UnsafeMutablePointer<Int32> = array.dataPointer.assumingMemoryBound(to: Int32.self)
+        for i in 0..<values.count { pointer[i] = values[i] }
+        return array
+    }
+
+    private static func causalMask(_ n: Int) throws -> MLMultiArray {
+        let mask = try MLMultiArray(shape: [1, NSNumber(value: n), NSNumber(value: n)], dataType: .float32)
+        let pointer: UnsafeMutablePointer<Float> = mask.dataPointer.assumingMemoryBound(to: Float.self)
+        for i in 0..<n {
+            for j in 0..<n {
+                let blocked: Bool = j > i
+                pointer[i * n + j] = blocked ? -1e9 : 0
+            }
+        }
+        return mask
+    }
+
+    /// One greedy decoder step: the most likely next token id (nil when the model gave no logits).
+    private func nextToken(decoder: MLModel, decoded: [Int32], hidden: MLMultiArray) throws -> Int? {
+        let n: Int = decoded.count
+        var positions: [Int32] = []
+        for i in 0..<n { positions.append(Int32(i)) }
+        let inputs: [String: MLFeatureValue] = [
+            "decoder_input_ids": MLFeatureValue(multiArray: try Self.int32Array(decoded)),
+            "encoder_hidden_states": MLFeatureValue(multiArray: hidden),
+            "position_ids": MLFeatureValue(multiArray: try Self.int32Array(positions)),
+            "causal_mask": MLFeatureValue(multiArray: try Self.causalMask(n)),
+        ]
+        let output: MLFeatureProvider = try decoder.prediction(from: MLDictionaryFeatureProvider(dictionary: inputs))
+        guard let logits: MLMultiArray = output.featureValue(for: "logits")?.multiArrayValue,
+              let vocabSize: Int = logits.shape.last?.intValue, vocabSize > 0 else { return nil }
+        // Logits cover every decoder position ([1, n, V]) or only the last one ([1, 1, V]).
+        let available: Int = max(1, logits.count / vocabSize)
+        let offset: Int = (min(n, available) - 1) * vocabSize
+        var best: Int = 0
+        var bestValue: Float = -Float.infinity
+        for v in 0..<vocabSize {
+            let value: Float = logits[offset + v].floatValue
+            if value > bestValue {
+                bestValue = value
+                best = v
+            }
+        }
+        return best
+    }
+
+    private func phonemeString(_ decoded: [Int32]) -> String {
+        var out = ""
+        for token in decoded.dropFirst() {
+            guard let phoneme: String = idToPhoneme[Int(token)], phoneme.count == 1 else { continue }
+            out += phoneme
+        }
+        return out
     }
 }
