@@ -124,6 +124,13 @@ final class JarvisController {
         // Scripted conversation for automated end-to-end tests, e.g.
         // `-JarvisScript "open the 3D space || make three red cubes || clone it twice"`.
         if let script = defaults.string(forKey: "JarvisScript"), !script.isEmpty { runScript(script) }
+        // Automated test of the onboarding "Begin" button (wake with speech and microphone).
+        if defaults.bool(forKey: "JarvisPressBegin") {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                self?.completeOnboarding()
+            }
+        }
     }
 
     /// Submits each `||`-separated command in turn, waiting for the previous turn
@@ -224,6 +231,14 @@ final class JarvisController {
         CrashLog.breadcrumb("wake: hologram presence")
         PresenceManager.shared.awakeStateChanged(true)
         CrashLog.breadcrumb("awake")
+    }
+
+    /// The onboarding "Begin" button: remember onboarding, close the card and wake up.
+    func completeOnboarding() {
+        CrashLog.breadcrumb("onboarding: begin")
+        records.setSetting("onboarded", "1")
+        showPanel(nil)
+        wake(source: .button)
     }
 
     /// Speak "Jarvis at your service, sir." (typed or repeated wake phrase while already awake).

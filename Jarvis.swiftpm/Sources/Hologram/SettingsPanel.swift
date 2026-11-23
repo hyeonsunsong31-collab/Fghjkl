@@ -223,11 +223,7 @@ struct OnboardingPanel: View {
                 default:
                     onboardingText(ko ? "앱 밖에서도 깨우려면 설정 › 가이드의 'Wake up Jarvis' 단축어와 AssistiveTouch 설정을 해 주십시오. 언제든 화면 오른쪽 아래 비상 웨이크 버튼으로 깨울 수 있습니다."
                                       : "To wake me outside the app, follow the 'Wake up Jarvis' shortcut and AssistiveTouch guide in Settings. The emergency wake button is always at the bottom right.")
-                    Button(ko ? "시작하기" : "Begin") {
-                        jarvis.records.setSetting("onboarded", "1")
-                        jarvis.showPanel(nil)
-                        jarvis.wake(source: .button)
-                    }
+                    Button(ko ? "시작하기" : "Begin") { jarvis.completeOnboarding() }
                     .buttonStyle(.borderedProminent).tint(Holo.cyan)
                 }
             }

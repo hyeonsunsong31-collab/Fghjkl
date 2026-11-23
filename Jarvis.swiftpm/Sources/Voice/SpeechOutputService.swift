@@ -63,6 +63,9 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
     private var spokenHistory: [(text: String, time: Date)] = []
 
     private let synthesizer = AVSpeechSynthesizer()
+    /// Test switch (launch argument -JarvisForceDirectSpeech YES): always exercise the
+    /// direct-synthesizer fallback after rendering, the path that used to crash.
+    private let forceDirectSpeech = UserDefaults.standard.bool(forKey: "JarvisForceDirectSpeech")
     private var queue: [(text: String, language: DetectedLanguage)] = []
     private var pumping = false
     private var generation = 0
@@ -194,7 +197,7 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
         CrashLog.breadcrumb("speech: system voice render")
         let rendered = await renderThroughEngine(makeUtterance(text, language: language), generation: gen,
                                                  timeout: 4 + Double(text.count) * 0.12)
-        guard !rendered, gen == generation else { return }
+        guard !rendered || forceDirectSpeech, gen == generation else { return }
         CrashLog.breadcrumb("speech: direct synthesizer fallback")
         synthesizer.stopSpeaking(at: .immediate)
         let direct = makeUtterance(text, language: language)
