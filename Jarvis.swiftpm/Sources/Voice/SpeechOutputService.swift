@@ -72,6 +72,8 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
     private let token = PlaybackToken()
     private var streamBuffer = ""
     private var directSpeechContinuation: CheckedContinuation<Void, Never>?
+    /// Identifies the direct-speech wait currently pending (0 = none), for its timeout.
+    private var directSpeechTicket = 0
 
     override init() {
         super.init()
@@ -119,8 +121,7 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
         queue.removeAll()
         streamBuffer = ""
         synthesizer.stopSpeaking(at: .immediate)
-        directSpeechContinuation?.resume()
-        directSpeechContinuation = nil
+        endDirectSpeech()
         AudioEngineHub.shared.stopPlayback()
         pumping = false
         isSpeaking = false
@@ -201,11 +202,28 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
         CrashLog.breadcrumb("speech: direct synthesizer fallback")
         synthesizer.stopSpeaking(at: .immediate)
         let direct = makeUtterance(text, language: language)
+        let limit: Double = 5 + Double(text.count) * 0.1
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             directSpeechContinuation?.resume()
             directSpeechContinuation = c
+            directSpeechTicket += 1
+            let ticket = directSpeechTicket
             synthesizer.speak(direct)
+            // Never wait forever for a delegate callback that may not come.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
+                self?.endDirectSpeech(ticket: ticket)
+            }
         }
+    }
+
+    /// Resume the pending direct-speech wait (delegate callback, stop, or timeout).
+    private func endDirectSpeech(ticket: Int? = nil) {
+        if let ticket, ticket != directSpeechTicket { return }
+        guard let c = directSpeechContinuation else { return }
+        directSpeechContinuation = nil
+        if ticket != nil { synthesizer.stopSpeaking(at: .word) }
+        c.resume()
     }
 
     private func renderThroughEngine(_ utterance: AVSpeechUtterance, generation gen: Int, timeout: TimeInterval) async -> Bool {
@@ -227,17 +245,11 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in
-            self.directSpeechContinuation?.resume()
-            self.directSpeechContinuation = nil
-        }
+        Task { @MainActor in self.endDirectSpeech() }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in
-            self.directSpeechContinuation?.resume()
-            self.directSpeechContinuation = nil
-        }
+        Task { @MainActor in self.endDirectSpeech() }
     }
 
     // MARK: Voices

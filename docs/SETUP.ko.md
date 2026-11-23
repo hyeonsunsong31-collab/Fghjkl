@@ -94,6 +94,7 @@ iOS는 어떤 앱도 전원을 켤 때 자동 실행되도록 허용하지 않�
 - **와이파이 등 시스템 설정이 안 바뀜**: Jarvis Bridge 단축어가 필요합니다(5장).
 - **백그라운드에서 웨이크가 안 됨**: Playgrounds 실행 중에는 iOS가 백그라운드를 보장하지 않습니다. AssistiveTouch/Siri 단축어를 쓰시거나 TestFlight 설치형을 사용하십시오.
 - **빌드 오류**: Swift Playgrounds 4.7 이상인지, `Package.swift`의 `platforms: [.iOS("26.0")]`가 유지되는지 확인.
+- **실행 중 "Jarvis Crashed / Unknown Crash"**: Jarvis는 비정상 종료의 원인(예외 내용과 직전에 하던 작업)을 기록해 두었다가, **다음 실행 때 채팅창 첫 메시지로 알려 줍니다.** 같은 내용이 파일 앱 › Jarvis › Logs › `previous-crash.txt`에도 저장됩니다. 그 메시지(또는 Playground 크래시 화면에서 **Show Console**을 켰을 때 보이는 `JARVIS CRASH:` 줄)를 캡처해 주시면 정확히 고칠 수 있습니다.
 - **"Loading… Crashed / Build failed"**: 앱 코드가 iPad에서 컴파일되지 않았다는 뜻입니다. Swift Playground 4.7의 컴파일러(Xcode 26.2~26.3 세대, Swift 6.2.x)는 Mac의 최신 Xcode보다 복잡한 식을 덜 참아서, 최신 Xcode에서는 되는 코드가 여기서는 "unable to type-check this expression in reasonable time"으로 실패할 수 있습니다. 저장소는 CI에서 Xcode 26.2·26.3·26.4로 실기기용 빌드를 매번 확인하므로, **최신 버전을 다시 내려받으십시오.** 그래도 실패하면 **Show Playground** → 오른쪽 위 빨간 오류 표시를 눌러 나오는 오류 목록을 캡처해 주십시오.
 - **열자마자 "Loading failed" / `CouldNotFindNullRecordSeparator`**: Swift Playground가 `Package.swift`를 해석한 결과를 읽지 못했다는 뜻입니다.
   1. 저장소의 **최신 버전**을 다시 내려받으십시오. `Package.swift`를 영문(ASCII)만 쓰도록 고친 버전이어야 합니다. `Package.swift`에는 한글·특수문자(—, “ ” 등)를 넣지 마십시오. 권한 안내문도 영문으로 둡니다.

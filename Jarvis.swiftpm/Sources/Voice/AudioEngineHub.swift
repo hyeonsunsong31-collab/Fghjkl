@@ -29,6 +29,8 @@ final class AudioEngineHub: @unchecked Sendable {
     private let lock = NSLock()
     private var scheduledBuffers = 0
     private var generation = 0
+    /// When the audio queued so far should have finished playing (main thread).
+    private var expectedDrain = Date.distantPast
 
     /// Microphone buffers (called on the realtime audio thread, never on the main actor).
     var onInputBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
@@ -253,6 +255,27 @@ final class AudioEngineHub: @unchecked Sendable {
             }
         }
         if !player.isPlaying { player.play() }
+        // Safety net: if playback stalls (callbacks never arrive), report "drained" anyway
+        // so Jarvis does not stay in the speaking state forever.
+        let duration: Double = Double(buffer.frameLength) / max(1, buffer.format.sampleRate)
+        expectedDrain = max(Date(), expectedDrain).addingTimeInterval(duration)
+        let deadline = expectedDrain.addingTimeInterval(2)
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.1, deadline.timeIntervalSinceNow)) { [weak self] in
+            self?.forceDrainIfStalled(generation: gen, deadline: deadline)
+        }
+    }
+
+    private func forceDrainIfStalled(generation gen: Int, deadline: Date) {
+        let now = Date()
+        guard now >= deadline, now >= expectedDrain.addingTimeInterval(2) else { return }
+        lock.lock()
+        let stalled = gen == generation && scheduledBuffers > 0
+        if stalled { scheduledBuffers = 0 }
+        lock.unlock()
+        if stalled {
+            Log.voice.error("Playback callbacks stalled; treating speech as finished")
+            onPlaybackDrained?()
+        }
     }
 
     /// Stop speech immediately (barge-in) and drop everything queued.

@@ -197,6 +197,8 @@ final class JarvisController {
 
         speech.onSpeakingChanged = { [weak self] speaking in
             guard let self else { return }
+            let state: String = speaking ? "started" : "ended"
+            Log.voice.info("Speaking \(state, privacy: .public)")
             if speaking {
                 self.phase = .speaking
                 self.brain.setSpeaking(true)
