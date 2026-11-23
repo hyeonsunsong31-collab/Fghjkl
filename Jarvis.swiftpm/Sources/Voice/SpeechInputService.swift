@@ -58,7 +58,7 @@ final class SpeechInputService {
         var isFinal: Bool
     }
 
-    private final class Session {
+    private final class Session: @unchecked Sendable {
         let language: DetectedLanguage
         let request: SFSpeechAudioBufferRecognitionRequest
         var task: SFSpeechRecognitionTask?
@@ -124,17 +124,21 @@ final class SpeechInputService {
             return
         }
         let hub = AudioEngineHub.shared
-        hub.onInputBuffer = { [router] buffer in router.handle(buffer) }
+        let router = self.router
+        // @Sendable: called on the realtime audio thread, so it must not inherit main-actor isolation.
+        hub.onInputBuffer = { @Sendable (buffer: AVAudioPCMBuffer) in router.handle(buffer) }
+        CrashLog.breadcrumb("audio: starting microphone")
         do {
             try hub.start(captureMicrophone: true)
         } catch {
             onError?("Audio engine failed: \(error.localizedDescription)")
             return
         }
-        hub.setMicrophoneCapture(true)
         isRunning = true
+        CrashLog.breadcrumb("speech: starting recognizers")
         beginSessions()
         startWatchdog()
+        CrashLog.breadcrumb("speech: listening")
     }
 
     func stop() {
@@ -166,13 +170,16 @@ final class SpeechInputService {
             request.taskHint = .dictation
             request.contextualStrings = contextualStrings
             let session = Session(language: language, request: request)
-            session.task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-                let hypothesis = result.map { r -> Hypothesis in
+            // @Sendable: the Speech framework calls this on its own queue.
+            session.task = recognizer.recognitionTask(with: request) { @Sendable [weak self] (result: SFSpeechRecognitionResult?, error: Error?) in
+                let hypothesis: Hypothesis? = result.map { (r: SFSpeechRecognitionResult) -> Hypothesis in
                     let segments = r.bestTranscription.segments
-                    let conf = segments.isEmpty ? 0 : segments.map { Double($0.confidence) }.reduce(0, +) / Double(segments.count)
-                    return Hypothesis(text: r.bestTranscription.formattedString, confidence: conf, isFinal: r.isFinal)
+                    var total: Double = 0
+                    for segment in segments { total += Double(segment.confidence) }
+                    let confidence: Double = segments.isEmpty ? 0 : total / Double(segments.count)
+                    return Hypothesis(text: r.bestTranscription.formattedString, confidence: confidence, isFinal: r.isFinal)
                 }
-                let failed = error != nil
+                let failed: Bool = error != nil
                 DispatchQueue.main.async {
                     self?.handle(hypothesis, failed: failed, language: language, session: session)
                 }
@@ -216,7 +223,10 @@ final class SpeechInputService {
 
     private func handle(_ hypothesis: Hypothesis?, failed: Bool, language: DetectedLanguage, session: Session) {
         guard isRunning, sessions[language] === session else { return }
-        if let h = hypothesis { session.latest = h }
+        if let h = hypothesis {
+            session.latest = h
+            if !failed { consecutiveFailures = 0 }
+        }
 
         switch mode {
         case .wakeOnly:
@@ -227,7 +237,7 @@ final class SpeechInputService {
                 if sessions.isEmpty { beginSessions() }
                 return
             }
-            if failed || hypothesis?.isFinal == true { restartSessionLater() }
+            if failed || hypothesis?.isFinal == true { restartSessionLater(afterFailure: failed) }
         case .conversation:
             if !finalizing, let best = bestHypothesis(includePartial: true) {
                 onPartial?(best.0)
@@ -237,7 +247,7 @@ final class SpeechInputService {
                     deliverUtterance()
                 }
             } else if failed {
-                restartSessionLater()
+                restartSessionLater(afterFailure: true)
             } else if hypothesis?.isFinal == true {
                 // The recogniser endpointed by itself.
                 finalize()
@@ -246,11 +256,18 @@ final class SpeechInputService {
     }
 
     private var restartPending = false
-    private func restartSessionLater() {
+    private var consecutiveFailures = 0
+
+    /// Restart recognition shortly; after repeated failures back off (0.3 s doubling up to 10 s)
+    /// instead of hammering the Speech framework in a tight loop.
+    private func restartSessionLater(afterFailure: Bool = false) {
         guard !restartPending else { return }
         restartPending = true
+        if afterFailure { consecutiveFailures += 1 }
+        let exponent = Double(min(max(consecutiveFailures - 1, 0), 6))
+        let delay: Double = afterFailure ? min(10, 0.3 * pow(2, exponent)) : 0.3
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self else { return }
             self.restartPending = false
             if self.isRunning && !self.finalizing { self.restartSessions() }

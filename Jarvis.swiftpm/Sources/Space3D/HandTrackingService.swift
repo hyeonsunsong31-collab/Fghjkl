@@ -37,7 +37,7 @@ final class HandTrackingService: NSObject {
         }
         if !configured { configure() }
         guard configured else { return }
-        processor.onResult = { [weak self] hands, time in
+        processor.onResult = { @Sendable [weak self] (hands: [HandLandmarks], time: Double) in
             Task { @MainActor in self?.handle(hands, time: time) }
         }
         let s = session
@@ -104,7 +104,7 @@ final class HandTrackingService: NSObject {
 
 /// Runs Vision on camera frames off the main thread.
 final class HandPoseProcessor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
-    var onResult: (([HandLandmarks], Double) -> Void)?
+    var onResult: (@Sendable ([HandLandmarks], Double) -> Void)?
     var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     weak var connection: AVCaptureConnection?
     private let request: VNDetectHumanHandPoseRequest = {

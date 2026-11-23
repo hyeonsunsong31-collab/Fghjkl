@@ -107,6 +107,12 @@ final class JarvisController {
         if defaults.bool(forKey: "JarvisNoMic") { micMuted = true }
         let onboarded = records.setting("onboarded") == "1" || defaults.bool(forKey: "JarvisSkipOnboarding")
         if !onboarded { activePanel = .onboarding }
+        // Tell the user (and whoever helps them) why the previous session ended, if it crashed.
+        if let report = CrashLog.previousReport {
+            let reason = report.split(separator: "\n").prefix(2).joined(separator: " · ")
+            appendMessage(.assistant, "\u{26A0}\u{FE0E} 지난 실행이 비정상 종료되었습니다 · Previous session crashed: \(reason)\n(파일 앱 › Jarvis › Logs › previous-crash.txt)",
+                          language: currentLanguage)
+        }
         Task {
             // Permissions are requested from the onboarding screen, not on first launch.
             if !micMuted && onboarded { await speechInput.start() }
@@ -200,6 +206,7 @@ final class JarvisController {
     // MARK: Wake / sleep
 
     func wake(source: InputModality, speak: Bool = true) {
+        CrashLog.breadcrumb("wake")
         lastInteraction = Date()
         let wasAsleep = !isAwake
         phase = .listening
@@ -211,9 +218,12 @@ final class JarvisController {
             records.logMessage(role: "assistant", text: Persona.wakeResponse, language: .english, runID: nil)
             speech.speak(Persona.wakeResponse, language: .english)
         }
+        CrashLog.breadcrumb("wake: Apple Intelligence prewarm")
         appleFM.prewarm()
         scheduleIdleSleep()
+        CrashLog.breadcrumb("wake: hologram presence")
         PresenceManager.shared.awakeStateChanged(true)
+        CrashLog.breadcrumb("awake")
     }
 
     /// Speak "Jarvis at your service, sir." (typed or repeated wake phrase while already awake).

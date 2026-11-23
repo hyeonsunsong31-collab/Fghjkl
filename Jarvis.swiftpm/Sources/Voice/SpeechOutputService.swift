@@ -1,5 +1,38 @@
 import AVFoundation
 
+/// Generation counter readable from any thread (the synthesizer calls back on its own queue).
+private final class PlaybackToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return current }
+    func advance() { lock.lock(); current += 1; lock.unlock() }
+}
+
+/// State of one `AVSpeechSynthesizer.write` rendering, shared with its background callback.
+/// Guarantees the continuation is resumed exactly once (end marker, cancel or timeout).
+private final class RenderState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var gotAudio = false
+    private var done = false
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) { self.continuation = continuation }
+
+    var isDone: Bool { lock.lock(); defer { lock.unlock() }; return done }
+
+    func markAudio() { lock.lock(); gotAudio = true; lock.unlock() }
+
+    func finish() {
+        lock.lock()
+        guard !done, let c = continuation else { lock.unlock(); return }
+        done = true
+        continuation = nil
+        let result = gotAudio
+        lock.unlock()
+        c.resume(returning: result)
+    }
+}
+
 /// Speaks Jarvis' replies.
 ///
 /// - English: **Kokoro-82M** British male neural voice (George by default);
@@ -33,6 +66,7 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
     private var queue: [(text: String, language: DetectedLanguage)] = []
     private var pumping = false
     private var generation = 0
+    private let token = PlaybackToken()
     private var streamBuffer = ""
     private var directSpeechContinuation: CheckedContinuation<Void, Never>?
 
@@ -78,6 +112,7 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
     /// Stop immediately and discard everything queued.
     func stop() {
         generation += 1
+        token.advance()
         queue.removeAll()
         streamBuffer = ""
         synthesizer.stopSpeaking(at: .immediate)
@@ -120,6 +155,7 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
                 self.spokenHistory.append((item.text, Date()))
                 if self.spokenHistory.count > 12 { self.spokenHistory.removeFirst(self.spokenHistory.count - 12) }
                 if item.language == .english && self.kokoroReady {
+                    CrashLog.breadcrumb("speech: Kokoro synthesis")
                     let voice = self.englishVoice, speed = self.rate
                     let samples = (try? await KokoroEngine.shared.synthesize(item.text, voice: voice, speed: speed)) ?? []
                     guard gen == self.generation else { break }
@@ -139,37 +175,51 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    /// Render a system voice into buffers routed through the echo-cancelled engine.
-    private func speakWithSystemVoice(_ text: String, language: DetectedLanguage, generation gen: Int) async {
+    /// A fresh utterance every time: AVSpeechSynthesizer raises a fatal exception
+    /// ("AVSpeechUtterance shouldn't be enqueued twice") if one instance is reused.
+    private func makeUtterance(_ text: String, language: DetectedLanguage) -> AVSpeechUtterance {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = Self.bestVoice(for: language)
-        let base = AVSpeechUtteranceDefaultSpeechRate
-        utterance.rate = max(AVSpeechUtteranceMinimumSpeechRate,
-                             min(AVSpeechUtteranceMaximumSpeechRate, base * (language == .korean ? 1.0 : 0.96) * rate))
+        let base: Float = AVSpeechUtteranceDefaultSpeechRate
+        let scaled: Float = base * (language == .korean ? 1.0 : 0.96) * rate
+        utterance.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, scaled))
         utterance.pitchMultiplier = language == .korean ? 0.92 : 0.9
         utterance.prefersAssistiveTechnologySettings = false
+        return utterance
+    }
 
-        let rendered: Bool = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
-            var gotAudio = false
-            var finished = false
-            synthesizer.write(utterance) { buffer in
-                guard !finished else { return }
-                guard let pcm = buffer as? AVAudioPCMBuffer else { return }
+    /// Render a system voice into buffers routed through the echo-cancelled engine;
+    /// if that yields no audio, let the synthesizer speak directly.
+    private func speakWithSystemVoice(_ text: String, language: DetectedLanguage, generation gen: Int) async {
+        CrashLog.breadcrumb("speech: system voice render")
+        let rendered = await renderThroughEngine(makeUtterance(text, language: language), generation: gen,
+                                                 timeout: 4 + Double(text.count) * 0.12)
+        guard !rendered, gen == generation else { return }
+        CrashLog.breadcrumb("speech: direct synthesizer fallback")
+        synthesizer.stopSpeaking(at: .immediate)
+        let direct = makeUtterance(text, language: language)
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            directSpeechContinuation?.resume()
+            directSpeechContinuation = c
+            synthesizer.speak(direct)
+        }
+    }
+
+    private func renderThroughEngine(_ utterance: AVSpeechUtterance, generation gen: Int, timeout: TimeInterval) async -> Bool {
+        let token = self.token
+        return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            let state = RenderState(c)
+            // Explicitly @Sendable: runs on the synthesizer's queue, never on the main actor.
+            synthesizer.write(utterance) { @Sendable (buffer: AVAudioBuffer) in
+                guard !state.isDone, let pcm = buffer as? AVAudioPCMBuffer else { return }
                 if pcm.frameLength == 0 {
-                    finished = true
-                    c.resume(returning: gotAudio)
+                    state.finish() // end of utterance
                     return
                 }
-                gotAudio = true
-                if gen == self.generation { AudioEngineHub.shared.play(buffer: pcm) }
+                state.markAudio()
+                if token.value == gen { AudioEngineHub.shared.play(buffer: pcm) }
             }
-        }
-        if !rendered && gen == generation {
-            // Fallback: let the synthesizer play directly.
-            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-                directSpeechContinuation = c
-                synthesizer.speak(utterance)
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { state.finish() }
         }
     }
 

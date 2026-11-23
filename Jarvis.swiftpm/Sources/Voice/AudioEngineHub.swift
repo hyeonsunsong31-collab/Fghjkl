@@ -4,6 +4,15 @@ import AVFoundation
 /// playback. Voice-processing I/O (echo cancellation) is enabled so Jarvis can
 /// keep listening while it speaks — the basis of barge-in — and all speech is
 /// played through the same engine so the canceller knows what to remove.
+///
+/// Crash-safety rules (AVAudioEngine raises Objective-C exceptions that Swift
+/// cannot catch):
+/// - every engine mutation happens on the **main thread**; calls from other
+///   threads (e.g. the speech synthesizer's buffer callback) are hopped there;
+/// - a tap is always removed before one is installed (two taps on one bus is fatal);
+/// - after a configuration change / interruption the engine is rebuilt once,
+///   debounced, instead of from inside the notification;
+/// - nothing is scheduled or played unless the engine is running.
 final class AudioEngineHub: @unchecked Sendable {
     static let shared = AudioEngineHub()
 
@@ -13,30 +22,35 @@ final class AudioEngineHub: @unchecked Sendable {
     let playbackFormat = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)!
     private(set) var isRunning = false
     private(set) var voiceProcessingEnabled = false
+    private var wantsCapture = false
     private var tapInstalled = false
+    private var playerConnected = false
+    private var restartScheduled = false
     private let lock = NSLock()
     private var scheduledBuffers = 0
+    private var generation = 0
 
-    /// Microphone buffers (called on the audio thread).
-    var onInputBuffer: ((AVAudioPCMBuffer) -> Void)?
+    /// Microphone buffers (called on the realtime audio thread, never on the main actor).
+    var onInputBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
     /// Fired on the main queue when queued playback has drained.
     var onPlaybackDrained: (() -> Void)?
 
     private init() {
-        NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+        let center = NotificationCenter.default
+        center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
             self?.handleInterruption(note)
         }
-        NotificationCenter.default.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.isRunning = false
-            self?.tapInstalled = false
-            try? self?.start(captureMicrophone: true)
+        center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.scheduleRestart()
         }
-        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            guard let self, self.isRunning else { return }
-            self.isRunning = false
-            self.tapInstalled = false
-            try? self.start(captureMicrophone: true)
+        center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            self?.scheduleRestart()
         }
+    }
+
+    /// Run `work` on the main thread (immediately when already there).
+    private func onMain(_ work: @escaping () -> Void) {
+        if Thread.isMainThread { work() } else { DispatchQueue.main.async { work() } }
     }
 
     func configureSession() throws {
@@ -47,14 +61,47 @@ final class AudioEngineHub: @unchecked Sendable {
         try session.setActive(true, options: [])
     }
 
+    // MARK: Lifecycle (main thread)
+
+    /// Start the engine (if needed) and capture the microphone or not.
     func start(captureMicrophone: Bool) throws {
-        if isRunning {
-            if captureMicrophone { installTapIfNeeded() } else { removeTap() }
+        guard Thread.isMainThread else {
+            onMain { try? self.start(captureMicrophone: captureMicrophone) }
             return
         }
+        wantsCapture = captureMicrophone
+        try ensureRunning()
+        applyCapture()
+    }
+
+    /// Turn microphone capture on or off without touching playback.
+    func setMicrophoneCapture(_ enabled: Bool) {
+        onMain {
+            self.wantsCapture = enabled
+            if enabled && !self.isRunning { try? self.ensureRunning() }
+            self.applyCapture()
+        }
+    }
+
+    func stop() {
+        onMain {
+            self.wantsCapture = false
+            self.removeTap()
+            self.player.stop()
+            self.engine.stop()
+            self.isRunning = false
+        }
+    }
+
+    /// Bring the engine up with voice processing and the speech player connected.
+    private func ensureRunning() throws {
+        if isRunning && engine.isRunning { return }
+        isRunning = false
+        CrashLog.breadcrumb("audio: session")
         try configureSession()
 
         if !voiceProcessingEnabled {
+            CrashLog.breadcrumb("audio: voice processing")
             do {
                 try engine.inputNode.setVoiceProcessingEnabled(true)
                 voiceProcessingEnabled = true
@@ -66,19 +113,40 @@ final class AudioEngineHub: @unchecked Sendable {
             }
         }
 
+        CrashLog.breadcrumb("audio: connect player")
         if player.engine == nil { engine.attach(player) }
-        engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
-        if captureMicrophone { installTapIfNeeded() }
+        if !playerConnected {
+            engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
+            playerConnected = true
+        }
+        // The input format can change with voice processing or a new route: (re)install the tap
+        // only once the graph is configured.
+        removeTap()
+        if wantsCapture { installTap() }
+        CrashLog.breadcrumb("audio: engine start")
         engine.prepare()
         try engine.start()
-        if engine.isRunning { player.play() }
-        isRunning = true
+        isRunning = engine.isRunning
+        if isRunning { player.play() }
     }
 
-    private func installTapIfNeeded() {
-        guard !tapInstalled else { return }
+    private func applyCapture() {
+        guard isRunning else { return }
+        if wantsCapture {
+            if !tapInstalled { installTap() }
+        } else {
+            removeTap()
+        }
+    }
+
+    private func installTap() {
+        CrashLog.breadcrumb("audio: microphone tap")
+        // Removing first is always safe and prevents the fatal "tap already installed" exception.
+        engine.inputNode.removeTap(onBus: 0)
+        tapInstalled = false
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
+        // No microphone (permission denied, no input route): capture nothing instead of crashing.
         guard format.sampleRate > 0, format.channelCount > 0 else { return }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.onInputBuffer?(buffer)
@@ -87,59 +155,87 @@ final class AudioEngineHub: @unchecked Sendable {
     }
 
     private func removeTap() {
-        guard tapInstalled else { return }
         engine.inputNode.removeTap(onBus: 0)
         tapInstalled = false
     }
 
-    func setMicrophoneCapture(_ enabled: Bool) {
-        if enabled { installTapIfNeeded() } else { removeTap() }
+    /// Rebuild the engine once, shortly after a configuration change or media reset.
+    private func scheduleRestart() {
+        onMain {
+            guard !self.restartScheduled else { return }
+            self.restartScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                self.restartScheduled = false
+                self.rebuild()
+            }
+        }
     }
 
-    func stop() {
+    private var recentRebuilds: [Date] = []
+
+    private func rebuild() {
+        // Only an engine that the system actually stopped needs rebuilding; never loop.
+        if engine.isRunning && isRunning { return }
+        let now = Date()
+        recentRebuilds = recentRebuilds.filter { now.timeIntervalSince($0) < 10 }
+        guard recentRebuilds.count < 4 else {
+            Log.voice.error("Audio engine keeps reconfiguring; pausing restarts")
+            return
+        }
+        recentRebuilds.append(now)
+        let capture = wantsCapture
         removeTap()
         player.stop()
         engine.stop()
         isRunning = false
+        wantsCapture = capture
+        do {
+            try ensureRunning()
+        } catch {
+            Log.voice.error("Audio engine restart failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: Playback
 
-    /// Queue mono float samples at 24 kHz.
+    /// Queue mono float samples at 24 kHz (any thread).
     func play(samples: [Float], completion: (() -> Void)? = nil) {
-        guard !samples.isEmpty, let buffer = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: AVAudioFrameCount(samples.count)) else {
-            completion?()
+        guard !samples.isEmpty, let buffer = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: AVAudioFrameCount(samples.count)),
+              let channel = buffer.floatChannelData else {
+            if let completion { onMain(completion) }
             return
         }
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { src in
-            buffer.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
+            if let base = src.baseAddress { channel[0].update(from: base, count: samples.count) }
         }
-        schedule(buffer, completion: completion)
+        onMain { self.schedule(buffer, completion: completion) }
     }
 
-    /// Queue any PCM buffer (converted to the playback format when needed).
+    /// Queue any PCM buffer, converted to the playback format when needed (any thread).
     func play(buffer: AVAudioPCMBuffer, completion: (() -> Void)? = nil) {
+        let ready: AVAudioPCMBuffer?
         if buffer.format == playbackFormat {
-            schedule(buffer, completion: completion)
-        } else if let converted = Self.convert(buffer, to: playbackFormat) {
-            schedule(converted, completion: completion)
+            ready = buffer
         } else {
-            completion?()
+            ready = Self.convert(buffer, to: playbackFormat)
         }
+        guard let ready, ready.frameLength > 0 else {
+            if let completion { onMain(completion) }
+            return
+        }
+        onMain { self.schedule(ready, completion: completion) }
     }
 
-    private var generation = 0
-
+    /// Main thread only.
     private func schedule(_ buffer: AVAudioPCMBuffer, completion: (() -> Void)?) {
-        if !engine.isRunning {
-            isRunning = false
-            try? start(captureMicrophone: tapInstalled)
+        if !isRunning || !engine.isRunning {
+            do { try ensureRunning() } catch { Log.voice.error("Playback engine failed: \(error.localizedDescription)") }
         }
-        // AVAudioPlayerNode raises an exception if played while the engine is stopped
+        // AVAudioPlayerNode raises an exception if used while the engine is stopped
         // (e.g. during an audio interruption): drop the audio instead of crashing.
-        guard engine.isRunning else {
-            DispatchQueue.main.async { completion?() }
+        guard engine.isRunning, playerConnected, buffer.format.channelCount == playbackFormat.channelCount else {
+            completion?()
             return
         }
         lock.lock(); scheduledBuffers += 1; let gen = generation; lock.unlock()
@@ -156,14 +252,17 @@ final class AudioEngineHub: @unchecked Sendable {
                 if remaining == 0 { self.onPlaybackDrained?() }
             }
         }
-        if !player.isPlaying && engine.isRunning { player.play() }
+        if !player.isPlaying { player.play() }
     }
 
     /// Stop speech immediately (barge-in) and drop everything queued.
     func stopPlayback() {
         lock.lock(); generation += 1; scheduledBuffers = 0; lock.unlock()
-        player.stop()
-        if engine.isRunning { player.play() }
+        onMain {
+            guard self.player.engine != nil else { return }
+            self.player.stop()
+            if self.engine.isRunning && self.playerConnected { self.player.play() }
+        }
     }
 
     var isPlaying: Bool {
@@ -172,7 +271,8 @@ final class AudioEngineHub: @unchecked Sendable {
     }
 
     static func convert(_ buffer: AVAudioPCMBuffer, to format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        guard let converter = AVAudioConverter(from: buffer.format, to: format) else { return nil }
+        guard buffer.frameLength > 0, buffer.format.sampleRate > 0,
+              let converter = AVAudioConverter(from: buffer.format, to: format) else { return nil }
         let ratio = format.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 1024)
         guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
@@ -190,7 +290,7 @@ final class AudioEngineHub: @unchecked Sendable {
         return (status == .error || error != nil) ? nil : out
     }
 
-    // MARK: Interruptions
+    // MARK: Interruptions (main thread)
 
     private func handleInterruption(_ note: Notification) {
         guard let info = note.userInfo, let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -199,9 +299,7 @@ final class AudioEngineHub: @unchecked Sendable {
         case .began:
             isRunning = false
         case .ended:
-            let capture = tapInstalled
-            tapInstalled = false
-            try? start(captureMicrophone: capture || true)
+            scheduleRestart()
         @unknown default:
             break
         }

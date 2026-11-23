@@ -38,6 +38,7 @@ final class PresenceManager: NSObject, AVPictureInPictureControllerDelegate, AVP
     /// Called once the PiP source layer is in the view hierarchy.
     func configurePiP() {
         guard pip == nil, AVPictureInPictureController.isPictureInPictureSupported() else { return }
+        CrashLog.breadcrumb("pip: configure")
         let source = AVPictureInPictureController.ContentSource(sampleBufferDisplayLayer: displayLayer, playbackDelegate: self)
         let controller = AVPictureInPictureController(contentSource: source)
         controller.delegate = self
