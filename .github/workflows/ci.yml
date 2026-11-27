@@ -133,7 +133,7 @@ jobs:
           grep 'warning:' build.log | sed -E 's/^.*Sources\///' | sort -u | head -60 || true
       - name: Launch in iPad simulator (smoke test)
         working-directory: Jarvis.swiftpm
-        timeout-minutes: 40
+        timeout-minutes: 55
         run: |
           set -x
           # Time limit for any single simulator command, so a hang shows up as a failure with logs.
@@ -158,8 +158,9 @@ jobs:
           t 60 xcrun simctl privacy "$DEVICE" grant camera "$BUNDLE" || true
           t 60 xcrun simctl privacy "$DEVICE" grant photos "$BUNDLE" || true
           phase "1 onboarding"
-          # 1) First launch exactly as a user sees it (onboarding).
-          t 120 xcrun simctl launch "$DEVICE" "$BUNDLE"
+          # 1) First launch exactly as a user sees it (onboarding). The first (cold) launch on a
+          #    freshly booted simulator can take a few minutes on CI runners.
+          t 600 xcrun simctl launch "$DEVICE" "$BUNDLE"
           sleep 20
           t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-launch.png
           t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
@@ -169,7 +170,7 @@ jobs:
           xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
             --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log.txt 2>&1 &
           LOGPID=$!
-          t 120 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES \
+          t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES \
             -JarvisScript "open the 3D space || make three red cubes || clone it twice || 파란 구 만들어줘"
           sleep 60
           t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-3d.png
@@ -183,7 +184,7 @@ jobs:
           xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
             --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log-music.txt 2>&1 &
           LOGPID=$!
-          t 120 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES \
+          t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES \
             -JarvisScript "make a red cube || clear the scene || yes || play bohemian rhapsody || open youtube"
           sleep 90
           t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-music.png
@@ -199,7 +200,7 @@ jobs:
           xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
             --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log-begin.txt 2>&1 &
           LOGPID=$!
-          t 120 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisPressBegin YES -JarvisForceDirectSpeech YES
+          t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisPressBegin YES -JarvisForceDirectSpeech YES
           sleep 30
           t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-begin.png
           kill $LOGPID || true
@@ -213,7 +214,7 @@ jobs:
           xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
             --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log-emergency.txt 2>&1 &
           LOGPID=$!
-          t 120 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisPressEmergency YES
+          t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisPressEmergency YES
           sleep 35
           t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-emergency.png
           kill $LOGPID || true
