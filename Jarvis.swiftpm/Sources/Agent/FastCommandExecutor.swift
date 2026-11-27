@@ -31,6 +31,9 @@ final class FastCommandExecutor {
             return CommandOutcome(success: true)
         case .stopSpeaking:
             c.speech.stop()
+            // "Stop" / "그만" while a song plays and Jarvis was not talking means the music.
+            let bargeIn: Bool = Date().timeIntervalSince(c.lastSpeechInterruption) < 2
+            if !bargeIn && c.music.isPlaying { _ = await c.music.pause() }
             return CommandOutcome(success: true)
         case .muteMic:
             c.setMicMuted(true)

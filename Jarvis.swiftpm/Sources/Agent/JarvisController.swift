@@ -195,6 +195,7 @@ final class JarvisController {
     }
 
     private func wireServices() {
+        CommandGrammar.isKnownApp = { (name: String) -> Bool in AppCatalog.find(name) != nil }
         speechInput.onWake = { [weak self] match in
             guard let self else { return }
             self.wake(source: .voice)
@@ -212,6 +213,12 @@ final class JarvisController {
             self.partialTranscript = ""
             // Ignore our own speech that leaked past the echo canceller.
             if self.speech.isLikelyEcho(text) { return }
+            // While a song plays the microphone hears it too: only take speech meant for Jarvis.
+            let answersQuestion: Bool = self.pendingConfirmation != nil && ConfirmationReply.classify(text) != nil
+            if self.music.isPlaying && !answersQuestion && !JarvisController.isMeantForJarvis(text) {
+                Log.voice.info("Ignored speech while music plays")
+                return
+            }
             self.submit(text, modality: .voice, language: language, confidence: confidence)
         }
         speechInput.onSpeechActivity = { [weak self] speaking in
@@ -236,6 +243,15 @@ final class JarvisController {
         }
 
         hands.onEvents = { [weak self] events in self?.handleHandEvents(events) }
+    }
+
+    /// Addressed by name, or a command the grammar recognises clearly ("pause", "다음 곡").
+    static func isMeantForJarvis(_ text: String) -> Bool {
+        let lower: String = text.lowercased()
+        let names: [String] = ["jarvis", "자비스", "쟈비스", "재비스"]
+        if names.contains(where: { lower.contains($0) }) { return true }
+        let parsed = CommandGrammar().parse(text)
+        return !parsed.isEmpty && parsed.confidence >= 0.8
     }
 
     // MARK: Wake / sleep
@@ -352,9 +368,15 @@ final class JarvisController {
         submit(option.utterance, modality: .button)
     }
 
+    /// When the user last cut Jarvis off mid-sentence.
+    @ObservationIgnored var lastSpeechInterruption = Date.distantPast
+
     /// Stop speaking and cancel any running generation (barge-in / new command).
     func cancelCurrentTurn() {
-        if speech.isSpeaking { orchestrator.noteInterruption() }
+        if speech.isSpeaking {
+            orchestrator.noteInterruption()
+            lastSpeechInterruption = Date()
+        }
         speech.stop()
         currentTask?.cancel()
         currentTask = nil
@@ -425,13 +447,13 @@ final class JarvisController {
 
     // MARK: Messages
 
-    @discardableResult
     /// Attach a tap-to-open button to Jarvis' next reply.
     func offerLink(_ url: URL?, title: String) {
         guard let url else { return }
         pendingLink = ChatLink(url: url, title: title)
     }
 
+    @discardableResult
     func appendMessage(_ role: ChatMessage.Role, _ text: String, language: DetectedLanguage, streaming: Bool = false) -> UUID {
         var m = ChatMessage(role: role, text: text, language: language, isStreaming: streaming)
         if role == .assistant, let link = pendingLink {

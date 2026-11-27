@@ -13,6 +13,9 @@ struct VoiceActivityDetector {
     var startFrames = 3
     /// Seconds of silence that end an utterance.
     var hangover: Double = 0.85
+    /// Continuous "speech" longer than this is background sound (music, TV, a fan): it ends
+    /// the utterance and becomes the new noise floor, so the detector can never get stuck.
+    var maxSpeech: Double = 15
 
     private(set) var noiseFloorDB: Double = -60
     private(set) var isSpeaking = false
@@ -20,6 +23,8 @@ struct VoiceActivityDetector {
     private var speechRun = 0
     private var silenceTime: Double = 0
     private var speechTime: Double = 0
+    /// Smoothed level while speaking (used to learn sustained background sound).
+    private var speechLevelDB: Double = -100
 
     /// RMS level of a block of samples in dBFS.
     static func level(_ samples: UnsafeBufferPointer<Float>) -> Double {
@@ -48,6 +53,7 @@ struct VoiceActivityDetector {
                     isSpeaking = true
                     silenceTime = 0
                     speechTime = Double(speechRun) * duration
+                    speechLevelDB = db
                     return .speechStarted
                 }
             } else {
@@ -56,6 +62,15 @@ struct VoiceActivityDetector {
             return nil
         }
         speechTime += duration
+        speechLevelDB = speechLevelDB * 0.97 + db * 0.03
+        if speechTime >= maxSpeech {
+            // Nobody talks for this long without a pause: treat the sound as background.
+            isSpeaking = false
+            speechRun = 0
+            silenceTime = 0
+            noiseFloorDB = max(noiseFloorDB, speechLevelDB - 3)
+            return .speechEnded(duration: speechTime)
+        }
         if voiced {
             silenceTime = 0
         } else {

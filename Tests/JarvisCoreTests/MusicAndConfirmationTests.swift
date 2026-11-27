@@ -61,4 +61,15 @@ final class MusicAndConfirmationTests: XCTestCase {
         XCTAssertEqual(YouTubeResults.bestMatch(videos, for: "아이유")?.id, "AAAAAAAAAA1", "no match: first result")
         XCTAssertTrue(YouTubeResults.parse("<html>no data</html>").isEmpty)
     }
+
+    func testKnownAppsAreConfidentCommands() {
+        let grammar = CommandGrammar()
+        XCTAssertEqual(grammar.parse("open youtube").commands.first?.intent, .openApp)
+        CommandGrammar.isKnownApp = { ["youtube", "유튜브", "멜론"].contains($0.lowercased()) }
+        defer { CommandGrammar.isKnownApp = nil }
+        XCTAssertGreaterThanOrEqual(grammar.parse("open youtube").confidence, 0.9)
+        XCTAssertGreaterThanOrEqual(grammar.parse("유튜브 열어줘").confidence, 0.9)
+        XCTAssertGreaterThanOrEqual(grammar.parse("멜론 켜줘").confidence, 0.9)
+        XCTAssertLessThan(grammar.parse("open zzqx").confidence, 0.88)
+    }
 }

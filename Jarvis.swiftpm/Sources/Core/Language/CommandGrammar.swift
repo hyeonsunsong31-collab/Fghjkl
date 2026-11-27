@@ -75,6 +75,10 @@ struct GrammarResult: Equatable {
 /// Compound requests ("make a red cube and clone it twice", "3D 공간 열고 큐브
 /// 만들어줘") are split into clauses; clauses that don't parse are merged back.
 struct CommandGrammar {
+    /// Set by the app: is this the name of an app Jarvis knows how to open? A known name
+    /// makes "open X" / "X 켜줘" a confident instant command instead of a guess.
+    nonisolated(unsafe) static var isKnownApp: ((String) -> Bool)?
+
 
     // MARK: Lexicon
 
@@ -485,7 +489,10 @@ struct CommandGrammar {
         let launch = ["켜", "실행", "launch"]
         if (c.has(open) || c.has(launch)) && best == nil {
             let app = Self.residue(c, removing: open + launch + ["app", "application", "the", "앱", "어플", "애플리케이션", "을", "를", "좀", "줘", "해줘"])
-            if !app.isEmpty { consider(.openApp, 0.8, ["app": app]) }
+            if !app.isEmpty {
+                let known: Bool = Self.isKnownApp?(app) ?? false
+                consider(.openApp, known ? 0.93 : 0.8, ["app": app])
+            }
         }
         return best
     }

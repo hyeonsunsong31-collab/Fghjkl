@@ -64,7 +64,7 @@ private final class AudioRouter: @unchecked Sendable {
         lock.lock()
         lastBufferTime = now
         // Exact digital silence (all zeros) means the microphone path is broken, not a quiet room.
-        if peak > 0.000_001 { lastSoundTime = now }
+        if peak > 0 { lastSoundTime = now }
         buffers += 1
         let event = vad.process(levelDB: level, duration: duration)
         let meter = vad.meter
@@ -173,6 +173,12 @@ final class SpeechInputService {
     private var finalizing = false
     private var finalizeDeadline: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
+    /// Second endpoint: the words stopped changing (a short "네" / "yes", or a level detector
+    /// kept busy by background sound).
+    private var stabilityTask: Task<Void, Never>?
+    private var lastPartial = ""
+    /// Any words recognised since launch (then the microphone path demonstrably works).
+    private var heardAnything = false
 
     init() {
         var r: [DetectedLanguage: SFSpeechRecognizer] = [:]
@@ -361,6 +367,8 @@ final class SpeechInputService {
     }
 
     private func cancelAll() {
+        stabilityTask?.cancel()
+        lastPartial = ""
         for t in pendingBegins.values { t.cancel() }
         pendingBegins.removeAll()
         router.clearRequests()
@@ -388,6 +396,7 @@ final class SpeechInputService {
         guard isRunning, sessions[language] === session else { return }
         if let h = hypothesis, !h.text.isEmpty {
             session.latest = h
+            heardAnything = true
             health[language, default: LanguageHealth()].quickFailures = 0
         }
         let ended: Bool = failure != nil || hypothesis?.isFinal == true
@@ -412,7 +421,13 @@ final class SpeechInputService {
                 if done { deliverUtterance() }
                 return
             }
-            if let best = bestHypothesis() { onPartial?(best.0) }
+            if let best = bestHypothesis() {
+                onPartial?(best.0)
+                if best.0 != lastPartial {
+                    lastPartial = best.0
+                    armStabilityEndpoint()
+                }
+            }
             let heardText: Bool = !(session.latest?.text.isEmpty ?? true)
             if hypothesis?.isFinal == true && failure == nil && heardText {
                 // The recogniser endpointed by itself.
@@ -443,10 +458,20 @@ final class SpeechInputService {
                 h.useServer = true
                 Log.voice.info("Speech \(language.rawValue, privacy: .public): trying server recognition")
             }
-            if h.quickFailures >= 6 && wantedLanguages.count > 1 {
-                h.disabledUntil = Date().addingTimeInterval(60)
-                h.quickFailures = 0
-                Log.voice.error("Speech \(language.rawValue, privacy: .public) paused for 60 s after repeated failures")
+            if h.quickFailures >= 6 {
+                if wantedLanguages.count > 1 {
+                    h.disabledUntil = Date().addingTimeInterval(60)
+                    h.quickFailures = 0
+                    Log.voice.error("Speech \(language.rawValue, privacy: .public) paused for 60 s after repeated failures")
+                } else if oneLanguageAtATime && languageMode == .auto {
+                    // The only language we listen for keeps failing: try the other one.
+                    h.quickFailures = 0
+                    health[language] = h
+                    preferredLanguage = Self.other(language)
+                    Log.voice.error("Speech \(language.rawValue, privacy: .public) keeps failing; listening in the other language")
+                    restartAll()
+                    return
+                }
             }
             if h.quickFailures == 4 { reportFailure(failure) }
         } else {
@@ -483,16 +508,21 @@ final class SpeechInputService {
         case .speechEnded(let duration):
             onSpeechActivity?(false)
             guard isRunning else { return }
-            if mode == .conversation {
-                if duration > 0.25 { finalize() }
-            } else {
-                // Wake-only: start fresh sessions for languages that heard something, so the
-                // next phrase is not appended to an old transcript (the others keep running).
-                for (language, s) in sessions where !(s.latest?.text.isEmpty ?? true) {
-                    end(language)
-                    scheduleBegin(language, after: 0.1)
-                }
-            }
+            // Wake-only sessions keep running: the wake phrase is matched on partial results as
+            // they arrive, and cutting a session at the end of speech could drop a slow
+            // recogniser's "…Jarvis". The watchdog recycles long sessions instead.
+            if mode == .conversation && duration > 0.25 { finalize() }
+        }
+    }
+
+    private func armStabilityEndpoint() {
+        stabilityTask?.cancel()
+        let snapshot = lastPartial
+        stabilityTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            guard !Task.isCancelled, let self else { return }
+            guard self.mode == .conversation, !self.finalizing, self.lastPartial == snapshot, !snapshot.isEmpty else { return }
+            self.finalize()
         }
     }
 
@@ -566,7 +596,7 @@ final class SpeechInputService {
             return
         }
         // Echo cancellation delivering only digital silence: fall back to the plain microphone.
-        if hub.voiceProcessingEnabled && signal.buffers > 60 && signal.sinceLastSound > 4 && !hub.isPlaying {
+        if hub.voiceProcessingEnabled && !heardAnything && signal.buffers > 200 && signal.sinceLastSound > 6 && !hub.isPlaying {
             Log.voice.error("Microphone delivers digital silence with echo cancellation; turning it off")
             onError?("에코 제거를 끄고 마이크를 다시 연결했습니다 · Echo cancellation was muting the microphone; it is now off.")
             hub.setVoiceProcessing(false)
@@ -577,8 +607,12 @@ final class SpeechInputService {
         guard !finalizing else { return }
         let wanted = wantedLanguages
         let now = Date()
-        // Recycle long sessions while the user is silent; begin missing ones; drop unwanted ones.
-        for (language, s) in sessions where now.timeIntervalSince(s.started) > 55 && !signal.speaking {
+        // Recycle long sessions (or long wake-mode transcripts) while the user is silent; begin
+        // missing ones; drop unwanted ones.
+        for (language, s) in sessions where !signal.speaking {
+            let old: Bool = now.timeIntervalSince(s.started) > 55
+            let wordy: Bool = mode == .wakeOnly && (s.latest?.text.count ?? 0) > 120
+            guard old || wordy else { continue }
             end(language)
             scheduleBegin(language, after: 0.1)
         }
