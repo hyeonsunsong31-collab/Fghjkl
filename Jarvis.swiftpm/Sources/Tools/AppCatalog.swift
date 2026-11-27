@@ -10,8 +10,20 @@ enum AppCatalog {
         let url: String
         /// Website used when iOS will not open the app itself (shown in Jarvis' browser).
         var web: String? = nil
-        var display: String { names.first ?? url }
+        /// The app's name as people write it ("YouTube", not "youtube").
+        var display: String {
+            let first: String = names.first ?? url
+            if let brand = AppCatalog.brandTitles[first] { return brand }
+            return first.unicodeScalars.allSatisfy { $0.isASCII } ? first.capitalized : first
+        }
     }
+
+    /// Proper casing for names that `capitalized` gets wrong.
+    static let brandTitles: [String: String] = [
+        "youtube": "YouTube", "youtube music": "YouTube Music", "naver": "NAVER", "naver map": "NAVER Map",
+        "kakao map": "KakaoMap", "naver webtoon": "NAVER Webtoon", "naver cafe": "NAVER Cafe",
+        "kakaotalk": "KakaoTalk", "whatsapp": "WhatsApp", "tiktok": "TikTok", "facetime": "FaceTime", "x": "X", "app store": "App Store"
+    ]
 
     static let entries: [Entry] = [
         // Apple
