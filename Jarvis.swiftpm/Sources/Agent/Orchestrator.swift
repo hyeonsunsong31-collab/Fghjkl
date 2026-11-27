@@ -59,19 +59,25 @@ final class Orchestrator {
         case .english: language = .english
         }
         c.currentLanguage = language
+        c.speechInput.noteLanguage(language)
 
         // Judge the previous turn from this reaction, then teach the brain.
         deliverPendingFeedback(reaction: text)
 
-        // Pending confirmation (calls, messages, clearing the scene).
+        // Pending confirmation (calls, messages, clearing the scene): yes / no by voice, text or button.
         if let pendingCommand = c.pendingConfirmation {
             c.pendingConfirmation = nil
-            if Self.isAffirmative(text) {
-                await executeConfirmed(pendingCommand, language: language)
-                return
-            } else if Self.isNegative(text) {
-                let reply = language == .korean ? "알겠습니다. 취소했습니다." : "Very well, sir. Cancelled."
-                finish(reply: reply, language: language, runID: nil)
+            if let yes = ConfirmationReply.classify(text) {
+                c.appendMessage(.user, text, language: language)
+                c.records.logMessage(role: "user", text: text, language: language, runID: nil)
+                let answer: String = yes ? "yes" : "no"
+                Log.agent.info("Confirmation answered: \(answer, privacy: .public)")
+                if yes {
+                    await executeConfirmed(pendingCommand, language: language)
+                } else {
+                    let reply = language == .korean ? "알겠습니다. 취소했습니다." : "Very well, sir. Cancelled."
+                    finish(reply: reply, language: language, runID: nil)
+                }
                 return
             }
         }
@@ -270,6 +276,10 @@ final class Orchestrator {
             ? (outcome.spokenOverride ?? Persona.confirmation(for: command, language: language, detail: outcome.detail))
             : Persona.failurePreamble(language) + " " + outcome.detail
         c.records.endRun(runID, success: outcome.success, actual: 0, error: outcome.success ? nil : outcome.detail)
+        let intent: String = command.intent.rawValue
+        let ok: Bool = outcome.success
+        let objectCount: Int = c.scene.document.objects.count
+        Log.agent.info("Confirmed \(intent, privacy: .public): success=\(ok, privacy: .public) objects=\(objectCount, privacy: .public)")
         finish(reply: reply, language: language, runID: runID)
     }
 
@@ -374,17 +384,6 @@ final class Orchestrator {
     }
 
     // MARK: Helpers
-
-    static func isAffirmative(_ text: String) -> Bool {
-        let t = text.lowercased()
-        return ["yes", "yeah", "sure", "do it", "go ahead", "please do", "confirm", "send", "call", "okay", "ok",
-                "네", "예", "응", "그래", "좋아", "보내", "해줘", "진행", "확인", "걸어"].contains { t.contains($0) }
-    }
-
-    static func isNegative(_ text: String) -> Bool {
-        let t = text.lowercased()
-        return ["no", "don't", "cancel", "stop", "never mind", "아니", "취소", "하지 마", "그만", "됐어"].contains { t.contains($0) }
-    }
 
     static func claimsAction(_ reply: String) -> Bool {
         let l = reply.lowercased()

@@ -5,6 +5,7 @@ struct SettingsPanel: View {
     @Environment(JarvisController.self) private var jarvis
     @State private var idleMinutes: Double = 5
     @State private var showGuide = false
+    @State private var echoCancellation = AudioEngineHub.voiceProcessingPreferred
     private var ko: Bool { jarvis.currentLanguage == .korean }
 
     // Each section is its own small view property so the body type-checks quickly
@@ -15,6 +16,7 @@ struct SettingsPanel: View {
                 VStack(alignment: .leading, spacing: 16) {
                     languageSection
                     voiceSection
+                    listeningSection
                     modelSection
                     presenceSection
                     permissionSection
@@ -130,10 +132,32 @@ struct SettingsPanel: View {
         }
     }
 
+    private var echoBinding: Binding<Bool> {
+        Binding(get: { echoCancellation }, set: { (on: Bool) in
+            echoCancellation = on
+            AudioEngineHub.shared.setVoiceProcessing(on)
+            jarvis.speechInput.ensureListening(restart: true)
+        })
+    }
+
+    private var listeningSection: some View {
+        group(ko ? "음성 듣기" : "Listening") {
+            Toggle(ko ? "에코 제거 (음성 처리)" : "Echo cancellation (voice processing)", isOn: echoBinding)
+            Text(ko ? "마이크가 소리를 못 듣는 기기에서는 자동으로 꺼집니다. 끄면 제 목소리가 마이크에 들어갈 수 있습니다."
+                    : "Turned off automatically if it silences the microphone. When off, my own voice may reach the microphone.")
+                .font(.system(size: 11, design: .rounded)).foregroundStyle(Holo.ice.opacity(0.6))
+            Button(ko ? "음성 인식 다시 시작" : "Restart listening") {
+                jarvis.speechInput.ensureListening(restart: true)
+                jarvis.statusNote = ko ? "음성 인식을 다시 시작했습니다" : "Listening restarted"
+            }
+            .foregroundStyle(Holo.cyan)
+        }
+    }
+
     private var permissionSection: some View {
         group(ko ? "권한" : "Permissions") {
             Button(ko ? "iOS 설정에서 Jarvis 권한 열기" : "Open Jarvis permissions in iOS Settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                if let url = URL(string: UIApplication.openSettingsURLString) { Task { await URLOpener.open(url) } }
             }
             .foregroundStyle(Holo.cyan)
         }

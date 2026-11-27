@@ -14,6 +14,13 @@ enum Panel: String, Identifiable {
     var id: String { rawValue }
 }
 
+/// A tap-to-open button under a chat message (an app, call or message iOS refused to open
+/// programmatically; a tap by the user is often allowed where code is not).
+struct ChatLink: Equatable {
+    var url: URL
+    var title: String
+}
+
 struct ChatMessage: Identifiable, Equatable {
     enum Role: String { case user, assistant, system }
     var id = UUID()
@@ -22,6 +29,7 @@ struct ChatMessage: Identifiable, Equatable {
     var language: DetectedLanguage
     var timestamp = Date()
     var isStreaming = false
+    var link: ChatLink?
 }
 
 /// The central state of Jarvis: owns every service and exposes the UI state.
@@ -47,6 +55,7 @@ final class JarvisController {
     var languageMode: LanguageMode = .auto
     var currentLanguage: DetectedLanguage = .english
     var pendingConfirmation: Command?
+    @ObservationIgnored private var pendingLink: ChatLink?
     var statusNote = ""
     var latticeSample: [NeuronID] = []
     var latticeStats: LatticeTickStats?
@@ -131,6 +140,22 @@ final class JarvisController {
                 self?.completeOnboarding()
             }
         }
+        // Automated test of the emergency wake button (pressed twice: asleep, then awake).
+        if defaults.bool(forKey: "JarvisPressEmergency") {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                self?.emergencyWake()
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                self?.emergencyWake()
+            }
+        }
+    }
+
+    /// The app came to the foreground: make sure Jarvis is listening again.
+    func appBecameActive() {
+        start()
+        guard records.setting("onboarded") == "1", !micMuted else { return }
+        speechInput.ensureListening()
     }
 
     /// Submits each `||`-separated command in turn, waiting for the previous turn
@@ -146,7 +171,8 @@ final class JarvisController {
                 Log.agent.info("Script command: \(command, privacy: .public)")
                 self.submit(command, modality: .text)
                 var ticks = 0
-                while (self.currentTask != nil || self.speech.isSpeaking) && ticks < 40 {
+                // Up to 30 s per command (finding and loading a song takes a while).
+                while (self.currentTask != nil || self.speech.isSpeaking) && ticks < 120 {
                     try? await Task.sleep(nanoseconds: 250_000_000)
                     ticks += 1
                 }
@@ -221,7 +247,7 @@ final class JarvisController {
         phase = .listening
         brain.wake()
         speechInput.mode = .conversation
-        if micMuted == false { Task { await speechInput.start() } }
+        if !micMuted { speechInput.ensureListening() }
         if wasAsleep && speak {
             appendMessage(.assistant, Persona.wakeResponse, language: .english)
             records.logMessage(role: "assistant", text: Persona.wakeResponse, language: .english, runID: nil)
@@ -243,13 +269,43 @@ final class JarvisController {
         wake(source: .button)
     }
 
-    /// Speak "Jarvis at your service, sir." (typed or repeated wake phrase while already awake).
-    func respondToWake() {
-        if !isAwake { wake(source: .text, speak: false) }
+    /// Speak "Jarvis at your service, sir." — always, even when already awake
+    /// (typed or repeated wake phrase, emergency button).
+    func respondToWake(source: InputModality = .text) {
+        if !isAwake {
+            wake(source: source, speak: false)
+        } else {
+            lastInteraction = Date()
+            scheduleIdleSleep()
+        }
         speech.stop()
         appendMessage(.assistant, Persona.wakeResponse, language: .english)
         records.logMessage(role: "assistant", text: Persona.wakeResponse, language: .english, runID: nil)
         speech.speak(Persona.wakeResponse, language: .english)
+        let from: String = source.rawValue
+        Log.agent.info("Wake response (\(from, privacy: .public))")
+    }
+
+    /// The emergency wake button: always answers and makes sure Jarvis is listening
+    /// again — the dependable way back when the voice wake did not catch.
+    func emergencyWake() {
+        CrashLog.breadcrumb("emergency wake")
+        Log.agent.info("Emergency wake pressed")
+        if activePanel == .onboarding {
+            records.setSetting("onboarded", "1")
+            showPanel(nil)
+        }
+        cancelCurrentTurn()
+        // Fresh recognition sessions (and a restarted microphone if it had stopped).
+        if !micMuted { speechInput.ensureListening(restart: true) }
+        respondToWake(source: .button)
+    }
+
+    /// Answer Jarvis' "Shall I …?" question with the on-screen Yes / No buttons.
+    func answerConfirmation(_ yes: Bool) {
+        let ko: Bool = currentLanguage == .korean
+        let answer: String = yes ? (ko ? "네" : "Yes") : (ko ? "아니요" : "No")
+        submit(answer, modality: .button, language: currentLanguage)
     }
 
     func sleep() {
@@ -282,6 +338,7 @@ final class JarvisController {
 
     func submit(_ text: String, modality: InputModality, language: DetectedLanguage? = nil, confidence: Double? = nil) {
         lastInteraction = Date()
+        pendingLink = nil
         if !isAwake && modality != .voice { wake(source: modality, speak: false) }
         cancelCurrentTurn()
         currentTask = Task { [weak self] in
@@ -320,7 +377,7 @@ final class JarvisController {
     func setMicMuted(_ muted: Bool) {
         micMuted = muted
         records.setSetting("micMuted", muted ? "1" : "0")
-        if muted { speechInput.stop() } else { Task { await speechInput.start() } }
+        if muted { speechInput.stop() } else { speechInput.ensureListening() }
         PresenceManager.shared.refresh()
     }
 
@@ -369,8 +426,18 @@ final class JarvisController {
     // MARK: Messages
 
     @discardableResult
+    /// Attach a tap-to-open button to Jarvis' next reply.
+    func offerLink(_ url: URL?, title: String) {
+        guard let url else { return }
+        pendingLink = ChatLink(url: url, title: title)
+    }
+
     func appendMessage(_ role: ChatMessage.Role, _ text: String, language: DetectedLanguage, streaming: Bool = false) -> UUID {
-        let m = ChatMessage(role: role, text: text, language: language, isStreaming: streaming)
+        var m = ChatMessage(role: role, text: text, language: language, isStreaming: streaming)
+        if role == .assistant, let link = pendingLink {
+            m.link = link
+            pendingLink = nil
+        }
         messages.append(m)
         if messages.count > 200 { messages.removeFirst(messages.count - 200) }
         return m.id

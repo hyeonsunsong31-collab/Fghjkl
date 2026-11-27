@@ -118,7 +118,7 @@ final class GrammarTests: XCTestCase {
     func testMusicAndWeb() {
         let m = g.parse("play Bohemian Rhapsody by Queen").commands.first
         XCTAssertEqual(m?.intent, .playMusic)
-        XCTAssertEqual(m?["query"], "bohemian rhapsody by queen")
+        XCTAssertEqual(m?["query"], "Bohemian Rhapsody by Queen")
         let ko = g.parse("아이유 노래 틀어줘").commands.first
         XCTAssertEqual(ko?.intent, .playMusic)
         XCTAssertEqual(ko?["query"], "아이유")
@@ -197,6 +197,13 @@ final class LanguageTests: XCTestCase {
         XCTAssertNil(m.match("I woke up early today"))
         XCTAssertNil(m.match("the service was great"))
         XCTAssertNil(m.match("오늘 일찍 일어났어"))
+        // Mixed scripts from the Korean recogniser, and reversed Korean word order.
+        XCTAssertNotNil(m.match("Wake up 자비스"))
+        XCTAssertEqual(m.match("wake up 자비스야 open YouTube")?.trailingCommand, "open YouTube")
+        XCTAssertNotNil(m.match("웨이크업 Jarvis"))
+        XCTAssertNotNil(m.match("일어나 자비스"))
+        XCTAssertNil(m.match("자비스 노래 틀어줘"))
+        XCTAssertNil(m.match("Jarvis, play some music"))
     }
 
     func testNumbers() {

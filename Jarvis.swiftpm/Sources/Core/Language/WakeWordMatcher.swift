@@ -16,12 +16,18 @@ struct WakeWordMatcher {
 
     private static let wakeVariants: Set<String> = ["wake", "wakes", "woke", "weak", "wait", "make", "wade", "way"]
     private static let upVariants: Set<String> = ["up", "app", "op", "a", "of", "upp"]
-    private static let koreanPhrases = ["웨이크업자비스", "웨이크업쟈비스", "웨이크업자비즈", "자비스일어나", "자비스깨어나", "자비스기상", "자비스일어나세요", "자비스깨어나라"]
+    private static let koreanPhrases = ["웨이크업자비스", "웨이크업쟈비스", "웨이크업자비즈", "자비스일어나", "자비스깨어나", "자비스기상", "자비스일어나세요", "자비스깨어나라",
+                                        "일어나자비스", "깨어나자비스"]
+    /// "Jarvis" as the Korean recogniser writes it (also with a vocative: "자비스야").
+    private static let koreanJarvis = ["자비스", "쟈비스", "재비스", "자비즈", "자비쓰"]
+    /// The Korean recogniser often keeps English words in Latin letters ("Wake up 자비스").
+    private static let latinToHangul: [(String, String)] = [("wake up", "웨이크업"), ("wake-up", "웨이크업"), ("wakeup", "웨이크업"), ("jarvis", "자비스")]
 
     /// Is `word` a plausible recognition of "Jarvis"?
     static func isJarvis(_ word: String) -> Bool {
         let w = word.lowercased().filter { $0.isLetter }
         if w.isEmpty { return false }
+        if koreanJarvis.contains(where: { w.hasPrefix($0) }) { return true }
         if ["jarvis", "jervis", "javis", "jarvas", "jarviss", "jarvish", "jarvi", "jarves", "jarvus", "garvis", "travis", "charvis", "jaravis"].contains(w) { return true }
         if FuzzyMatch.distance(w, "jarvis") <= 2 && (w.hasPrefix("j") || w.hasPrefix("ch") || w.hasPrefix("g")) { return true }
         return FuzzyMatch.phoneticKey(w) == FuzzyMatch.phoneticKey("jarvis")
@@ -61,7 +67,11 @@ struct WakeWordMatcher {
     }
 
     private func matchKorean(_ transcript: String) -> Match? {
-        let compact = transcript.replacingOccurrences(of: " ", with: "")
+        var unified = transcript
+        for (latin, hangul) in Self.latinToHangul {
+            unified = unified.replacingOccurrences(of: latin, with: hangul, options: .caseInsensitive)
+        }
+        let compact = unified.replacingOccurrences(of: " ", with: "")
             .filter { !$0.isPunctuation }
         guard Hangul.hangulRatio(compact) > 0 else { return nil }
         let jamoCompact = Array(Hangul.decompose(compact))

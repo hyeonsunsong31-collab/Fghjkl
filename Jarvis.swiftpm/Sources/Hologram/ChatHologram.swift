@@ -38,6 +38,7 @@ struct ChatHologram: View {
                 }
                 .transition(.opacity)
             }
+            if jarvis.pendingConfirmation != nil { confirmationBar }
             inputBar
         }
         .padding(12)
@@ -84,11 +85,13 @@ struct ChatHologram: View {
                     .font(Holo.mono(13))
                     .foregroundStyle(Holo.ice.opacity(0.4))
             }
-            TextField("", text: $draft, axis: .vertical)
+            // Single line: Return (software or hardware keyboard) sends. A vertical text field
+            // would insert a newline instead and never submit.
+            TextField("", text: $draft)
                 .font(Holo.mono(14))
                 .foregroundStyle(.white)
-                .lineLimit(1...4)
                 .focused($focused)
+                .textInputAutocapitalization(.sentences)
                 .submitLabel(.send)
                 .onSubmit(send)
         }
@@ -100,7 +103,7 @@ struct ChatHologram: View {
 
     private var sendButton: some View {
         let empty: Bool = draft.isEmpty
-        let blank: Bool = draft.trimmingCharacters(in: .whitespaces).isEmpty
+        let blank: Bool = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let tint: Color = empty ? Holo.ice.opacity(0.3) : Holo.cyan
         let glow: Color = empty ? Color.clear : Holo.cyan
         return Button(action: send) {
@@ -119,6 +122,28 @@ struct ChatHologram: View {
         guard !text.isEmpty else { return }
         draft = ""
         jarvis.submit(text, modality: .text)
+        // Keep the keyboard up for the next message.
+        focused = true
+    }
+
+    /// Yes / No buttons while Jarvis waits for a confirmation ("Shall I call …?").
+    private var confirmationBar: some View {
+        let ko: Bool = jarvis.currentLanguage == .korean
+        return HStack(spacing: 10) {
+            Image(systemName: "questionmark.circle.fill").foregroundStyle(Holo.amber)
+            Text(ko ? "진행할까요?" : "Proceed?")
+                .font(Holo.mono(12))
+                .foregroundStyle(Holo.ice.opacity(0.9))
+            Spacer(minLength: 0)
+            Button(ko ? "네" : "Yes") { jarvis.answerConfirmation(true) }
+                .buttonStyle(.borderedProminent)
+                .tint(Holo.cyan)
+            Button(ko ? "아니요" : "No") { jarvis.answerConfirmation(false) }
+                .buttonStyle(.bordered)
+                .tint(Holo.red)
+        }
+        .padding(.horizontal, 4)
+        .transition(.opacity)
     }
 }
 
@@ -151,6 +176,17 @@ struct HoloIconToggle: View {
 
 struct MessageBubble: View {
     let message: ChatMessage
+
+    private func linkButton(_ link: ChatLink) -> some View {
+        Link(destination: link.url) {
+            Label(link.title, systemImage: "arrow.up.forward.app")
+                .font(Holo.mono(11, .bold))
+                .foregroundStyle(Holo.deep)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Holo.cyan))
+        }
+    }
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if message.role == .user { Spacer(minLength: 40) }
@@ -171,6 +207,7 @@ struct MessageBubble: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .strokeBorder((message.role == .user ? Holo.amber : Holo.cyan).opacity(0.35))
                     )
+                if let link = message.link { linkButton(link) }
             }
             if message.role != .user { Spacer(minLength: 40) }
         }

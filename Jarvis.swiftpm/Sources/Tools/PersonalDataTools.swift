@@ -122,7 +122,7 @@ final class PersonalDataTools: NSObject, CLLocationManagerDelegate, CBCentralMan
             number = phone.filter { $0.isNumber || $0 == "+" }
         }
         guard let url = URL(string: "tel:\(number)") else { return (false, "Invalid number.") }
-        let ok = await UIApplication.shared.open(url)
+        let ok = await URLOpener.open(url)
         return (ok, ok ? number : "This device cannot place calls.")
     }
 
@@ -136,7 +136,7 @@ final class PersonalDataTools: NSObject, CLLocationManagerDelegate, CBCentralMan
         }
         let text = (body ?? "").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         guard let url = URL(string: "sms:\(number)&body=\(text)") else { return (false, "Invalid message.") }
-        let ok = await UIApplication.shared.open(url)
+        let ok = await URLOpener.open(url)
         return (ok, ok ? "Opened Messages" : "Messages is unavailable.")
     }
 

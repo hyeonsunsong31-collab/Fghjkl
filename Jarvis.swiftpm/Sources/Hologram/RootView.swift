@@ -7,6 +7,7 @@ import UIKit
 struct RootView: View {
     @Environment(JarvisController.self) private var jarvis
     @Environment(\.horizontalSizeClass) private var hSize
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         GeometryReader { geo in
@@ -72,6 +73,8 @@ struct RootView: View {
         }
         .preferredColorScheme(.dark)
         .tint(Holo.cyan)
+        // SwiftUI's own URL opener is the most reliable route out of a Swift Playground-hosted app.
+        .onAppear { URLOpener.swiftUIOpen = openURL }
     }
 
     /// Screen area the HUD covers while the 3D space is open (status bar, command deck,

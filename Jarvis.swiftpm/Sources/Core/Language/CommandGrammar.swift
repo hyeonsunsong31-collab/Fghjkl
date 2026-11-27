@@ -413,9 +413,10 @@ struct CommandGrammar {
         // --- Music ----------------------------------------------------------------
         let play = ["play", "put on", "queue", "listen to", "start playing", "틀어", "재생", "들려", "플레이"]
         if c.has(play) && !c.has(["video", "영상", "동영상"]) || (c.has(music) && c.has(["틀", "들려", "재생", "켜"]) && !c.has(off)) {
-            let query = Self.residue(c, removing: play + music + ["some", "a bit of", "by", "from", "on youtube", "유튜브에서", "유튜브로", "좀", "을", "를", "아무"])
+            // Keep the user's own words for the song ("Shape of You" must not lose "of you").
+            let query = MusicQuery.extract(from: c.original) ?? ""
             if c.has(play) || c.has(music) {
-                consider(.playMusic, query.isEmpty ? 0.85 : 0.92, query.isEmpty ? [:] : ["query": Self.restoreArtistPreposition(c, query)])
+                consider(.playMusic, query.isEmpty ? 0.85 : 0.92, query.isEmpty ? [:] : ["query": query])
             }
         }
         if c.has(["pause", "hold the music", "일시정지", "일시 정지", "잠깐 멈춰"]) { consider(.pauseMusic, 0.92) }
@@ -481,8 +482,9 @@ struct CommandGrammar {
         }
 
         // --- Open app (lowest priority among "open") ---------------------------------
-        if c.has(open) && best == nil {
-            let app = Self.residue(c, removing: open + ["app", "application", "the", "앱", "어플", "애플리케이션", "을", "를", "좀", "줘", "해줘"])
+        let launch = ["켜", "실행", "launch"]
+        if (c.has(open) || c.has(launch)) && best == nil {
+            let app = Self.residue(c, removing: open + launch + ["app", "application", "the", "앱", "어플", "애플리케이션", "을", "를", "좀", "줘", "해줘"])
             if !app.isEmpty { consider(.openApp, 0.8, ["app": app]) }
         }
         return best

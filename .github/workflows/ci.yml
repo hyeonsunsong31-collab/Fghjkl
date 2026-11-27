@@ -171,6 +171,21 @@ jobs:
           echo "---- app log (agent) ----"; grep -E "Script command|agent|space3d" ../app-log.txt | tail -60 || true
           if xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP STILL RUNNING ✅"; else echo "APP NOT RUNNING ❌"; fi
           xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
+          # 2b) Yes/no confirmation, the requested song, and opening an app (web fallback when
+          #     the app is not installed, as in the simulator).
+          xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
+            --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log-music.txt 2>&1 &
+          LOGPID=$!
+          xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES \
+            -JarvisScript "make a red cube || clear the scene || yes || play bohemian rhapsody || open youtube"
+          sleep 90
+          xcrun simctl io "$DEVICE" screenshot ../screenshot-music.png
+          kill $LOGPID || true
+          echo "---- app log (music / apps / confirmation) ----"; grep -E "Script command|Turn|Confirm|Music|Open " ../app-log-music.txt | tail -40 || true
+          if grep -q "Confirmed clearScene: success=true objects=0" ../app-log-music.txt; then echo "CONFIRMATION YES ✅"; else echo "CONFIRMATION NOT APPLIED ❌"; exit 1; fi
+          if grep -iqE "Music: .* -> .*bohemian" ../app-log-music.txt; then echo "REQUESTED SONG ✅"; else echo "REQUESTED SONG NOT CONFIRMED ⚠️ (YouTube may be unreachable from CI)"; fi
+          if grep -qE "Open youtube: via" ../app-log-music.txt; then echo "APP OPEN ATTEMPTED ✅"; else echo "APP OPEN NOT ATTEMPTED ❌"; exit 1; fi
+          xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
           # 3) The onboarding "Begin" button: wake with spoken reply and microphone capture,
           #    forcing the direct-synthesizer fallback that used to crash on devices.
           xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
@@ -183,6 +198,20 @@ jobs:
           echo "---- app log (begin) ----"; grep -E "Speaking|voice|Script|Turn" ../app-log-begin.txt | tail -30 || true
           if xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP ALIVE AFTER BEGIN ✅"; else echo "APP DIED AFTER BEGIN ❌"; exit 1; fi
           if grep -q "Speaking ended" ../app-log-begin.txt; then echo "RETURNED TO LISTENING ✅"; else echo "STUCK SPEAKING ❌"; exit 1; fi
+          xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
+          # 4) The emergency wake button, pressed while asleep and again while awake: it must
+          #    answer both times and (re)start listening.
+          xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
+            --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log-emergency.txt 2>&1 &
+          LOGPID=$!
+          xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisPressEmergency YES
+          sleep 35
+          xcrun simctl io "$DEVICE" screenshot ../screenshot-emergency.png
+          kill $LOGPID || true
+          echo "---- app log (emergency) ----"; grep -E "Emergency|Wake response|Speaking|voice|Listening|Microphone|Audio" ../app-log-emergency.txt | tail -40 || true
+          if xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP ALIVE AFTER EMERGENCY WAKE ✅"; else echo "APP DIED AFTER EMERGENCY WAKE ❌"; exit 1; fi
+          RESPONSES=$(grep -c "Wake response (button)" ../app-log-emergency.txt || true)
+          if [ "$RESPONSES" -ge 2 ]; then echo "EMERGENCY WAKE ANSWERED TWICE ✅"; else echo "EMERGENCY WAKE ANSWERED $RESPONSES TIME(S) ❌"; exit 1; fi
           DATA=$(xcrun simctl get_app_container "$DEVICE" "$BUNDLE" data)
           if [ -s "$DATA/Documents/Jarvis/Logs/last-crash.txt" ]; then echo "CRASH LOG:"; cat "$DATA/Documents/Jarvis/Logs/last-crash.txt"; exit 1; fi
           CRASHES=$(ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i jarvis || true)
@@ -197,5 +226,9 @@ jobs:
             screenshot-launch.png
             screenshot-3d.png
             screenshot-begin.png
+            screenshot-music.png
+            screenshot-emergency.png
             app-log.txt
             app-log-begin.txt
+            app-log-music.txt
+            app-log-emergency.txt

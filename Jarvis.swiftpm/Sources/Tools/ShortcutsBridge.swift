@@ -28,7 +28,7 @@ enum ShortcutsBridge {
         items.append(URLQueryItem(name: "x-cancel", value: "jarvis://bridge?status=cancel"))
         components.queryItems = items
         guard let url = components.url else { return false }
-        return await UIApplication.shared.open(url)
+        return await URLOpener.open(url)
     }
 
     /// Send a structured action to the Jarvis Bridge shortcut.
@@ -51,6 +51,6 @@ enum ShortcutsBridge {
     /// Open the Shortcuts app on the "new shortcut" screen (for onboarding guides).
     @MainActor
     static func openCreateShortcut() async {
-        if let url = URL(string: "shortcuts://create-shortcut") { _ = await UIApplication.shared.open(url) }
+        if let url = URL(string: "shortcuts://create-shortcut") { _ = await URLOpener.open(url) }
     }
 }

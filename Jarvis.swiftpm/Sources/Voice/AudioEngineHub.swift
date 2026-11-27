@@ -1,4 +1,5 @@
 import AVFoundation
+import os
 
 /// Owns the single `AVAudioEngine` shared by microphone capture and speech
 /// playback. Voice-processing I/O (echo cancellation) is enabled so Jarvis can
@@ -15,6 +16,19 @@ import AVFoundation
 /// - nothing is scheduled or played unless the engine is running.
 final class AudioEngineHub: @unchecked Sendable {
     static let shared = AudioEngineHub()
+
+    enum HubError: LocalizedError {
+        case notRunning
+        var errorDescription: String? { "The audio engine did not start" }
+    }
+
+    /// User preference: echo cancellation (voice-processing I/O). On by default; the
+    /// speech watchdog turns it off when it leaves the microphone silent.
+    static let voiceProcessingKey = "JarvisVoiceProcessing"
+    static var voiceProcessingPreferred: Bool {
+        get { UserDefaults.standard.object(forKey: voiceProcessingKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: voiceProcessingKey) }
+    }
 
     let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -85,6 +99,44 @@ final class AudioEngineHub: @unchecked Sendable {
         }
     }
 
+    /// Is the microphone tap live on a running engine? (main thread)
+    var isCapturing: Bool { isRunning && engine.isRunning && tapInstalled }
+
+    /// Rebuild the engine now and resume capture (main thread; used by the speech watchdog).
+    func restartCapture() throws {
+        guard Thread.isMainThread else {
+            onMain { try? self.restartCapture() }
+            return
+        }
+        removeTap()
+        player.stop()
+        engine.stop()
+        isRunning = false
+        wantsCapture = true
+        try ensureRunning()
+        applyCapture()
+    }
+
+    /// Turn echo cancellation on or off (the engine is rebuilt; main thread).
+    func setVoiceProcessing(_ enabled: Bool) {
+        onMain {
+            Self.voiceProcessingPreferred = enabled
+            guard enabled != self.voiceProcessingEnabled else { return }
+            let capture = self.wantsCapture
+            self.removeTap()
+            self.player.stop()
+            self.engine.stop()
+            self.isRunning = false
+            self.wantsCapture = capture
+            do {
+                try self.ensureRunning()
+                self.applyCapture()
+            } catch {
+                Log.voice.error("Audio engine restart failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
     func stop() {
         onMain {
             self.wantsCapture = false
@@ -102,16 +154,19 @@ final class AudioEngineHub: @unchecked Sendable {
         CrashLog.breadcrumb("audio: session")
         try configureSession()
 
-        if !voiceProcessingEnabled {
+        let wantVoiceProcessing = Self.voiceProcessingPreferred
+        if wantVoiceProcessing != voiceProcessingEnabled {
             CrashLog.breadcrumb("audio: voice processing")
             do {
-                try engine.inputNode.setVoiceProcessingEnabled(true)
-                voiceProcessingEnabled = true
-                // Keep other audio (music) at full volume while we listen.
-                engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
-                    AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
+                try engine.inputNode.setVoiceProcessingEnabled(wantVoiceProcessing)
+                voiceProcessingEnabled = wantVoiceProcessing
+                if wantVoiceProcessing {
+                    // Keep other audio (music) at full volume while we listen.
+                    engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
+                        AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
+                }
             } catch {
-                Log.voice.error("Voice processing unavailable: \(error.localizedDescription)")
+                Log.voice.error("Voice processing unavailable: \(error.localizedDescription, privacy: .public)")
             }
         }
 
@@ -129,7 +184,10 @@ final class AudioEngineHub: @unchecked Sendable {
         engine.prepare()
         try engine.start()
         isRunning = engine.isRunning
-        if isRunning { player.play() }
+        guard isRunning else { throw HubError.notRunning }
+        player.play()
+        let mode: String = voiceProcessingEnabled ? "on" : "off"
+        Log.voice.info("Audio engine running (echo cancellation \(mode, privacy: .public), capture \(self.tapInstalled, privacy: .public))")
     }
 
     private func applyCapture() {
@@ -174,6 +232,7 @@ final class AudioEngineHub: @unchecked Sendable {
     }
 
     private var recentRebuilds: [Date] = []
+    private var deferredRebuild = false
 
     private func rebuild() {
         // Only an engine that the system actually stopped needs rebuilding; never loop.
@@ -181,7 +240,15 @@ final class AudioEngineHub: @unchecked Sendable {
         let now = Date()
         recentRebuilds = recentRebuilds.filter { now.timeIntervalSince($0) < 10 }
         guard recentRebuilds.count < 4 else {
-            Log.voice.error("Audio engine keeps reconfiguring; pausing restarts")
+            // Pause, but never give up: try again once things have settled.
+            Log.voice.error("Audio engine keeps reconfiguring; retrying in 5 s")
+            if !deferredRebuild {
+                deferredRebuild = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    self.deferredRebuild = false
+                    self.rebuild()
+                }
+            }
             return
         }
         recentRebuilds.append(now)

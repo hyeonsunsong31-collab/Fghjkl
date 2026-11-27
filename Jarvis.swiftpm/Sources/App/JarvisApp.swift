@@ -20,7 +20,8 @@ struct JarvisApp: App {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
-                jarvis.start()
+                // First launch starts everything; every return to the foreground re-checks listening.
+                jarvis.appBecameActive()
             case .background:
                 jarvis.saveBrain()
                 jarvis.scene.save()

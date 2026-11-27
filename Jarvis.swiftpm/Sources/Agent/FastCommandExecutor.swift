@@ -213,8 +213,20 @@ final class FastCommandExecutor {
 
         // MARK: Device
         case .openApp:
-            let (ok, detail) = await AppCatalog.open(p["app"] ?? "")
-            return CommandOutcome(success: ok, detail: ok ? "" : detail)
+            switch await AppCatalog.open(p["app"] ?? "", korean: ko) {
+            case .opened(let name):
+                return CommandOutcome(success: true, detail: name)
+            case .web(let name, let site):
+                c.offerLink(URLOpener.lastRefused, title: ko ? "\(name) 앱 열기" : "Open the \(name) app")
+                c.showPanel(.browser)
+                await c.web.load(site)
+                return CommandOutcome(success: true, detail: name,
+                                      spokenOverride: ko ? "iOS가 \(name) 앱 열기를 허용하지 않아, 제 브라우저에서 \(name) 웹사이트를 열었습니다."
+                                                         : "iOS wouldn't let me open the \(name) app, so I've opened \(name) on the web in my browser, sir.")
+            case .failed(let message):
+                c.offerLink(URLOpener.lastRefused, title: ko ? "탭하여 열기" : "Tap to open")
+                return CommandOutcome(success: false, detail: message)
+            }
         case .flashlightOn, .flashlightOff:
             let (ok, detail) = DeviceControls.setTorch(command.intent == .flashlightOn)
             return CommandOutcome(success: ok, detail: detail)
@@ -253,9 +265,11 @@ final class FastCommandExecutor {
             return CommandOutcome(success: ok, detail: ok ? "" : (ko ? "'Jarvis Bridge' 단축어가 필요합니다. 설정의 안내를 참고해 주십시오." : "This needs the 'Jarvis Bridge' shortcut; see the guide in Settings."))
         case .call:
             let (ok, detail) = await c.personal.call(p["contact"] ?? "")
+            if !ok { c.offerLink(URLOpener.lastRefused, title: ko ? "탭하여 전화 걸기" : "Tap to call") }
             return CommandOutcome(success: ok, detail: ok ? "" : detail)
         case .message:
             let (ok, detail) = await c.personal.message(p["contact"], body: p["body"])
+            if !ok { c.offerLink(URLOpener.lastRefused, title: ko ? "탭하여 메시지 열기" : "Tap to open Messages") }
             return CommandOutcome(success: ok, detail: ok ? "" : detail)
         }
     }
