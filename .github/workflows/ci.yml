@@ -219,6 +219,7 @@ jobs:
           kill $LOGPID || true
           echo "---- app log (emergency) ----"; grep -E "Emergency|Wake response|Speaking|voice|Listening|Microphone|Audio" ../app-log-emergency.txt | tail -40 || true
           if t 60 xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP ALIVE AFTER EMERGENCY WAKE ✅"; else echo "APP DIED AFTER EMERGENCY WAKE ❌"; exit 1; fi
+          if grep -q "Emergency button hit-test: button=true passthrough=true" ../app-log-emergency.txt; then echo "BUTTON TAKES TOUCHES, REST PASSES THROUGH ✅"; else echo "EMERGENCY BUTTON HIT-TEST FAILED ❌"; grep "hit-test" ../app-log-emergency.txt || true; exit 1; fi
           RESPONSES=$(grep -c "Wake response (button)" ../app-log-emergency.txt || true)
           if [ "$RESPONSES" -ge 2 ]; then echo "EMERGENCY WAKE ANSWERED TWICE ✅"; else echo "EMERGENCY WAKE ANSWERED $RESPONSES TIME(S) ❌"; exit 1; fi
           DATA=$(t 60 xcrun simctl get_app_container "$DEVICE" "$BUNDLE" data)

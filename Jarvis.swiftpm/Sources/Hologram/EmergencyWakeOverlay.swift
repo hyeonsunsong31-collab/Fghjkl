@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import os
 
 /// The **emergency wake button** (requirement 9): a separate top-level window
 /// above every screen, sheet and panel of the app, so it is always visible and
@@ -49,6 +50,19 @@ final class EmergencyWakeOverlay {
         // The hidden volume slider needs a window too.
         DeviceControls.installVolumeView(in: w)
         CrashLog.breadcrumb("emergency button installed")
+        // Once laid out, check with UIKit's real hit-testing that the button takes touches and
+        // everything else falls through to the app (logged; asserted by the CI smoke test).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.verifyHitTesting() }
+    }
+
+    private func verifyHitTesting() {
+        guard let w = window, let target = w.touchTarget else { return }
+        let center: CGPoint = target.convert(CGPoint(x: target.bounds.midX, y: target.bounds.midY), to: w)
+        let onButton: UIView? = w.hitTest(center, with: nil)
+        let elsewhere: UIView? = w.hitTest(CGPoint(x: w.bounds.midX, y: w.bounds.midY * 0.5), with: nil)
+        let buttonTakesTouch: Bool = onButton.map { $0 === target || $0.isDescendant(of: target) } ?? false
+        let passesThrough: Bool = elsewhere == nil
+        Log.agent.info("Emergency button hit-test: button=\(buttonTakesTouch, privacy: .public) passthrough=\(passesThrough, privacy: .public)")
     }
 }
 
