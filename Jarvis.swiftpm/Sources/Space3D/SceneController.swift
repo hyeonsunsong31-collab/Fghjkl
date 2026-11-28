@@ -69,6 +69,12 @@ final class SceneController {
         fill.light.attenuationRadius = 4
         fill.position = SIMD3(-0.8, 0.6, 0.6)
         root.addChild(fill)
+        // Neutral front fill so painted and metal parts keep their true colours.
+        let front = DirectionalLight()
+        front.light.intensity = 1100
+        front.light.color = .white
+        front.look(at: SIMD3(0, 0.2, 0), from: SIMD3(-0.6, 0.5, 1.6), relativeTo: nil)
+        root.addChild(front)
     }
 
     private func addGrid() {
@@ -208,9 +214,10 @@ final class SceneController {
                                              font: .systemFont(ofSize: 0.07, weight: .semibold),
                                              containerFrame: .zero, alignment: .center, lineBreakMode: .byWordWrapping)
         }
-        let key = "\(obj.shape)-\(obj.size.x)-\(obj.size.y)-\(obj.size.z)"
+        let param: Float = obj.param ?? 0
+        let key = "\(obj.shape)-\(obj.size.x)-\(obj.size.y)-\(obj.size.z)-\(param)"
         if let cached = meshCache[key] { return cached }
-        let data = MeshGenerator.mesh(for: obj.shape, size: obj.size, segments: 40)
+        let data = MeshGenerator.mesh(for: obj.shape, size: obj.size, param: param, segments: 40)
         let resource = try? MeshResource.generate(from: [Self.descriptor(data, name: obj.shape)])
         if let resource { meshCache[key] = resource }
         return resource
@@ -222,9 +229,12 @@ final class SceneController {
         let entity: Entity
         if let parts = obj.parts, !parts.isEmpty {
             let group = Entity()
+            let solid = renderStyle.solid(composite: true)
             for part in parts {
                 guard let m = mesh(for: part) else { continue }
-                let child = ModelEntity(mesh: m, materials: [HoloMaterials.body(HoloPalette.uiColor(part.color), selected: selected, hovered: hovered)])
+                let material = HoloMaterials.part(HoloPalette.uiColor(part.color), material: part.material, solid: solid,
+                                                  selected: selected, hovered: hovered)
+                let child = ModelEntity(mesh: m, materials: [material])
                 child.position = part.position
                 child.orientation = Self.quaternion(part.rotation)
                 child.scale = part.scale
@@ -232,7 +242,9 @@ final class SceneController {
             }
             entity = group
         } else if let m = mesh(for: obj) {
-            entity = ModelEntity(mesh: m, materials: [HoloMaterials.body(HoloPalette.uiColor(obj.color), selected: selected, hovered: hovered)])
+            let material = HoloMaterials.part(HoloPalette.uiColor(obj.color), material: obj.material ?? "plastic",
+                                              solid: renderStyle.solid(composite: false), selected: selected, hovered: hovered)
+            entity = ModelEntity(mesh: m, materials: [material])
         } else {
             entity = Entity()
         }
@@ -330,13 +342,37 @@ final class SceneController {
     }
 
     @discardableResult
-    func createComposite(_ spec: ModelSpec, color: String? = nil) -> SceneObject {
+    func createComposite(_ spec: ModelSpec, color: String? = nil, design: String? = nil) -> SceneObject {
         checkpoint()
-        let obj = document.addComposite(spec, color: color)
+        let obj = document.addComposite(spec, color: color, design: design)
         rebuildAll()
         frameAll()
         scheduleSave()
         return obj
+    }
+
+    /// The designed model a follow-up refers to: the selected design, else the most recent one.
+    func designTarget() -> SceneObject? {
+        if let selected = document.selected, selected.design != nil { return selected }
+        return document.objects.last { $0.design != nil }
+    }
+
+    /// Replace a design with its refined version where it stands (undoable).
+    func refineDesign(_ id: String, spec: ModelSpec, design: String?) {
+        checkpoint()
+        document.replaceDesign(id, with: spec, design: design)
+        document.selectedID = id
+        sync(rebuild: [id])
+        frameAll()
+    }
+
+    /// Real materials or holograms (see `RenderStyle`).
+    var renderStyle: RenderStyle = RenderStyle.current
+
+    func setRenderStyle(_ style: RenderStyle) {
+        renderStyle = style
+        RenderStyle.current = style
+        rebuildAll()
     }
 
     @discardableResult
@@ -591,11 +627,11 @@ final class SceneController {
             if let parts = obj.parts, !parts.isEmpty {
                 for part in parts {
                     let pq = Self.quaternion(part.rotation)
-                    let data = MeshGenerator.mesh(for: part.shape, size: part.size, segments: 32)
+                    let data = MeshGenerator.mesh(for: part.shape, size: part.size, param: part.param ?? 0, segments: 32)
                     meshes.append(("\(obj.name)_\(part.shape)", data, { p in objTransform(pq.act(p * part.scale) + part.position) }))
                 }
             } else if obj.shape != "text" {
-                meshes.append((obj.name, MeshGenerator.mesh(for: obj.shape, size: obj.size, segments: 32), objTransform))
+                meshes.append((obj.name, MeshGenerator.mesh(for: obj.shape, size: obj.size, param: obj.param ?? 0, segments: 32), objTransform))
             }
         }
         let stamp = Int(Date().timeIntervalSince1970)

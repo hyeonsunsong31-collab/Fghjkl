@@ -128,6 +128,11 @@ enum Persona {
         case .generateModel:
             return ko ? "요청하신 \(p["description"] ?? "모델")\(Hangul.objectParticle(for: p["description"] ?? "모델")) 설계해 공간에 배치했습니다."
                       : "I've drafted the \(p["description"] ?? "model") and placed it in the workspace, sir."
+        case .refineModel:
+            return ko ? "말씀하신 대로 설계를 수정했습니다." : pick(["Adjusted as you asked, sir.", "The design has been revised, sir."])
+        case .setRenderStyle:
+            return ko ? (p["style"] == "hologram" ? "홀로그램 표현으로 바꿨습니다." : "실제 재질 표현으로 바꿨습니다.")
+                      : (p["style"] == "hologram" ? "Holographic rendering, sir." : "Realistic materials, sir.")
         case .cloneObject:
             return ko ? (count > 1 ? "\(count)개 복제했습니다." : "복제했습니다.") : (count > 1 ? "Cloned \(englishNumber(count)) times, sir." : "Cloned, sir.")
         case .deleteObject: return ko ? "삭제했습니다." : "Removed, sir."

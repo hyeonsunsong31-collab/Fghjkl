@@ -22,7 +22,11 @@ struct OptionGenerator {
         case .open3D:
             return ([o("Make a cube", "큐브 만들어"), o("Enable hand tracking", "손 인식 켜"), o("Build a helmet", "헬멧 만들어")],
                     [r("Try sculpting with your hands: pinch to grab, spread both hands to scale.", "손으로 조작해 보십시오. 집어서 옮기고, 양손 간격으로 크기를 바꿀 수 있습니다.", "enable hand tracking", "손 인식 켜")])
-        case .createObject, .generateModel:
+        case .generateModel, .refineModel:
+            return ([o("Make the main colour gold", "전체를 금색으로 바꿔"), o("Make it bigger", "더 크게 만들어"), o("Hologram mode", "홀로그램 모드")],
+                    [r("Refine any part by name, e.g. 'make the wheels gold', 'add a chimney' or 'remove the spoiler'.",
+                       "부품 이름으로 고칠 수 있습니다. 예: '바퀴를 금색으로 바꿔', '굴뚝 추가해', '스포일러 빼줘'.")])
+        case .createObject:
             return ([o("Make it bigger", "더 크게 만들어"), o("Clone it", "복제해"), o("Change colour to gold", "금색으로 바꿔")],
                     [r("Save it as your wallpaper once you're happy with the composition.", "구도가 마음에 드시면 배경화면으로 저장해 보십시오.", "set as wallpaper", "배경화면으로 저장해")])
         case .cloneObject:

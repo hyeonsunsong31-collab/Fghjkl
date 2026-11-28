@@ -194,6 +194,27 @@ jobs:
           if grep -iqE "Music: .* -> .*bohemian" ../app-log-music.txt; then echo "REQUESTED SONG ✅"; else echo "REQUESTED SONG NOT CONFIRMED ⚠️ (YouTube may be unreachable from CI)"; fi
           if grep -qE "Open youtube: via" ../app-log-music.txt; then echo "APP OPEN ATTEMPTED ✅"; else echo "APP OPEN NOT ATTEMPTED ❌"; exit 1; fi
           t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
+          phase "2c detailed designs"
+          # 2c) Detailed 3D design requests: colours per part, counts, extras, a refinement and Korean.
+          xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
+            --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log-design.txt 2>&1 &
+          LOGPID=$!
+          t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES -JarvisResetScene YES \
+            -JarvisScript "make a red sports car with gold wheels and a spoiler"
+          sleep 30
+          t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-design-car.png
+          t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
+          t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES -JarvisResetScene YES \
+            -JarvisScript "design a two story house with a blue roof and a chimney || make the roof green || 눈이 빨간 로봇 만들어줘 || make a castle with 6 towers and red flags"
+          sleep 75
+          t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-designs.png
+          kill $LOGPID || true
+          echo "---- app log (designs) ----"; grep -E "Script command|Turn|Design|Refined" ../app-log-design.txt | tail -40 || true
+          for EXPECT in "Design: car/sports via library" "Design: house via library" "Refined design: house via library" "Design: robot via library" "Design: castle via library"; do
+            if grep -q "$EXPECT" ../app-log-design.txt; then echo "$EXPECT ✅"; else echo "MISSING: $EXPECT ❌"; exit 1; fi
+          done
+          if grep -E "Design.*missing=\[[^]]" ../app-log-design.txt; then echo "A REQUESTED DETAIL WAS NOT BUILT ❌"; exit 1; else echo "EVERY REQUESTED DETAIL BUILT ✅"; fi
+          t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
           phase "3 Begin button"
           # 3) The onboarding "Begin" button: wake with spoken reply and microphone capture,
           #    forcing the direct-synthesizer fallback that used to crash on devices.
@@ -239,7 +260,10 @@ jobs:
             screenshot-begin.png
             screenshot-music.png
             screenshot-emergency.png
+            screenshot-design-car.png
+            screenshot-designs.png
             app-log.txt
             app-log-begin.txt
             app-log-music.txt
             app-log-emergency.txt
+            app-log-design.txt

@@ -22,6 +22,9 @@ struct CommandDeck: View {
     private var pages: [(String, [Item])] {
         let j = jarvis
         let say: (String, String) -> () -> Void = { en, kr in { j.submit(j.currentLanguage == .korean ? kr : en, modality: .button) } }
+        let holographic: Bool = j.scene.renderStyle == .hologram
+        let styleLabel: (String, String) = holographic ? ("REALISTIC", "실사 재질") : ("HOLOGRAM", "홀로그램")
+        let styleCommand: (String, String) = holographic ? ("realistic mode", "실사 모드") : ("hologram mode", "홀로그램 모드")
         let modelling: [Item] = [
             Item(icon: "hand.raised.fingers.spread.fill", en: "HANDS", ko: "손 인식", active: j.handTrackingEnabled, tint: Holo.amber) {
                 Task { await j.setHandTracking(!j.handTrackingEnabled) }
@@ -43,7 +46,9 @@ struct CommandDeck: View {
             Item(icon: "arrow.down.right.and.arrow.up.left", en: "SMALLER", ko: "작게", action: say("make it smaller", "작게 만들어")),
             Item(icon: "rotate.right", en: "ROTATE", ko: "회전", action: say("rotate it 45 degrees", "45도 회전해")),
             Item(icon: "paintpalette.fill", en: "GOLD", ko: "금색", action: say("make it gold", "금색으로 바꿔")),
-            Item(icon: "sparkles", en: "DESIGN", ko: "설계", action: say("build a helmet", "헬멧 만들어")),
+            Item(icon: "sparkles", en: "DESIGN", ko: "설계", action: say("design a red sports car with gold wheels and a spoiler",
+                                                                        "금색 바퀴와 스포일러가 달린 빨간 스포츠카 만들어")),
+            Item(icon: "cube.transparent", en: styleLabel.0, ko: styleLabel.1, action: say(styleCommand.0, styleCommand.1)),
             Item(icon: "square.and.arrow.up", en: "EXPORT", ko: "내보내기", action: say("export the model", "모델 내보내기")),
             Item(icon: "photo.on.rectangle.angled", en: "WALLPAPER", ko: "배경화면", action: say("set as wallpaper", "배경화면으로 저장해")),
             Item(icon: "scope", en: "RESET VIEW", ko: "시점 초기화", action: say("reset the view", "시점 초기화")),

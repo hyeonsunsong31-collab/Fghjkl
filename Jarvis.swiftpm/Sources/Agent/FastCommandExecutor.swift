@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import os
 
 /// Result of executing one built-in command.
 struct CommandOutcome {
@@ -116,16 +117,12 @@ final class FastCommandExecutor {
             let made = c.scene.create(shape: shape, color: p["color"], count: count, sizeFactor: size, text: p["content"])
             return CommandOutcome(success: !made.isEmpty)
         case .generateModel:
+            return await design(p["request"] ?? p["description"] ?? "sculpture", description: p["description"], language: language)
+        case .refineModel:
+            return await refine(p["request"] ?? command.text, language: language)
+        case .setRenderStyle:
             c.setSpaceOpen(true)
-            let description = p["description"] ?? "sculpture"
-            var spec = ModelSpec.template(for: description)
-            let isGeneric = spec.name.lowercased() == description.lowercased().capitalized.lowercased() || spec.name == "Sculpture"
-            if c.appleFM.isAvailable && isGeneric {
-                if let designed = try? await AppleFMDesigner.design(description, language: language), designed.parts.count >= 2 {
-                    spec = designed
-                }
-            }
-            c.scene.createComposite(spec, color: p["color"])
+            c.scene.setRenderStyle(p["style"] == "hologram" ? .hologram : .solid)
             return CommandOutcome(success: true)
         case .cloneObject:
             let made = c.scene.clone(p, count: Int(p["count"] ?? "1") ?? 1)
@@ -275,6 +272,70 @@ final class FastCommandExecutor {
             if !ok { c.offerLink(URLOpener.lastRefused, title: ko ? "탭하여 메시지 열기" : "Tap to open Messages") }
             return CommandOutcome(success: ok, detail: ok ? "" : detail)
         }
+    }
+
+    // MARK: Design (detailed 3D modelling)
+
+    /// Apple Intelligence designs whatever the parametric library cannot (when available).
+    private var designer: DesignStudio.Designer? {
+        guard AppleFMDesigner.isAvailable else { return nil }
+        return { prompt in await AppleFMDesigner.design(prompt) }
+    }
+
+    private func design(_ request: String, description: String?, language: DetectedLanguage) async -> CommandOutcome {
+        c.setSpaceOpen(true)
+        var brief = DesignBrief.parse(request, description: description)
+        brief.korean = language == .korean
+        let outcome = await DesignStudio.design(brief, designer: designer)
+        c.scene.createComposite(outcome.spec, design: Self.encode(brief))
+        Self.log("Design", outcome)
+        return CommandOutcome(success: true, detail: "\(outcome.spec.parts.count) parts", spokenOverride: DesignReport.text(outcome))
+    }
+
+    /// "make the wheels gold", "add a chimney", "remove the spoiler", "two more legs" → the same model, revised.
+    private func refine(_ request: String, language: DetectedLanguage) async -> CommandOutcome {
+        guard let target = c.scene.designTarget(), let base = target.design.flatMap(Self.decode) else {
+            // Nothing has been designed yet: treat it as a new design request.
+            return await design(request, description: nil, language: language)
+        }
+        c.setSpaceOpen(true)
+        var edit = DesignBrief.parse(request)
+        edit.korean = language == .korean
+        let lower = request.lowercased()
+        let more = ["more", "extra", "another", "하나 더", "더 달", "더 추가", "추가"].contains { lower.contains($0) }
+        let fewer = ["fewer", "less ", "덜", "줄여"].contains { lower.contains($0) }
+        if more || fewer {
+            // Relative counts ("two more legs") start from what the model has now.
+            let used = DesignLibrary.design(base)?.counts ?? [:]
+            for (component, n) in edit.counts {
+                let have = used[component] ?? base.counts[component] ?? 0
+                edit.counts[component] = Swift.max(0, fewer ? have - n : have + n)
+            }
+        }
+        let refined = base.refined(by: edit)
+        let outcome = await DesignStudio.design(refined, designer: designer)
+        c.scene.refineDesign(target.id, spec: outcome.spec, design: Self.encode(refined))
+        Self.log("Refined design", outcome)
+        return CommandOutcome(success: true, detail: "\(outcome.spec.parts.count) parts", spokenOverride: DesignReport.changes(edit, outcome: outcome))
+    }
+
+    private static func encode(_ brief: DesignBrief) -> String? {
+        (try? JSONEncoder().encode(brief)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    private static func decode(_ json: String) -> DesignBrief? {
+        json.data(using: .utf8).flatMap { try? JSONDecoder().decode(DesignBrief.self, from: $0) }
+    }
+
+    /// Diagnostics only (no user words): what was designed and how faithfully.
+    private static func log(_ label: String, _ o: DesignStudio.Outcome) {
+        let subject: String = o.brief.subject.map { s in o.brief.variant.map { "\(s)/\($0)" } ?? s } ?? "unknown"
+        let source: String = o.source.rawValue
+        let parts: Int = o.spec.parts.count
+        let colours: String = o.brief.colors.keys.sorted().joined(separator: ",")
+        let counts: String = o.brief.counts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+        let missing: String = o.unhandled.joined(separator: ",")
+        Log.space.info("\(label, privacy: .public): \(subject, privacy: .public) via \(source, privacy: .public) parts=\(parts, privacy: .public) colours=[\(colours, privacy: .public)] counts=[\(counts, privacy: .public)] missing=[\(missing, privacy: .public)]")
     }
 
     private func noTarget(_ ko: Bool) -> String {

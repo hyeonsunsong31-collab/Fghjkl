@@ -16,6 +16,12 @@ struct SceneObject: Codable, Identifiable, Equatable {
     /// Composite models (designed objects) keep their primitive parts here (positions relative to the object).
     var parts: [SceneObject]?
     var createdAt: Date = Date()
+    /// Surface material ("paint", "metal", "glass", "emissive", …); nil = default hologram look.
+    var material: String?
+    /// Shape-specific detail (see `MeshGenerator`).
+    var param: Float?
+    /// The design brief (JSON) a composite was made from, so later requests can refine it.
+    var design: String?
 
     var isComposite: Bool { !(parts ?? []).isEmpty }
 
@@ -97,25 +103,47 @@ struct SceneDocument: Codable, Equatable {
     }
 
     @discardableResult
-    mutating func addComposite(_ spec: ModelSpec, color override: String? = nil) -> SceneObject {
-        let s = spec.sanitized()
+    mutating func addComposite(_ spec: ModelSpec, color override: String? = nil, design: String? = nil) -> SceneObject {
+        let s = spec.sanitized().grounded()
         let parts = s.parts.map { p in
-            SceneObject(shape: p.shape, name: p.shape, color: override ?? p.color, position: p.position,
-                        rotation: SIMD3(0, p.rotationY, 0), size: p.size)
+            SceneObject(shape: p.shape, name: p.name, color: override ?? p.color, position: p.position, rotation: p.rotation,
+                        size: p.size, material: p.material, param: p.param)
         }
-        var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude), hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
-        for p in parts {
-            lo = SIMD3(min(lo.x, p.position.x - p.size.x / 2), min(lo.y, p.position.y - p.size.y / 2), min(lo.z, p.position.z - p.size.z / 2))
-            hi = SIMD3(max(hi.x, p.position.x + p.size.x / 2), max(hi.y, p.position.y + p.size.y / 2), max(hi.z, p.position.z + p.size.z / 2))
-        }
-        let extent = parts.isEmpty ? SIMD3<Float>(0.3, 0.3, 0.3) : hi - lo
-        var obj = SceneObject(shape: "group", name: s.name, color: override ?? "cyan", position: .zero, size: extent, parts: parts)
+        let extent = parts.isEmpty ? SIMD3<Float>(0.3, 0.3, 0.3) : s.extent
+        var obj = SceneObject(shape: "group", name: s.name, color: override ?? Self.dominantColor(s), position: .zero, size: extent, parts: parts)
+        obj.design = design
+        // A three-quarter view shows a designed object far better than a straight-on one.
+        obj.rotation = SIMD3(0, -32, 0)
         let spot = nextPosition(for: extent)
         obj.position = SIMD3(spot.x, 0, spot.z)
         objects.append(obj)
         selectedID = obj.id
         updatedAt = Date()
         return obj
+    }
+
+    /// Replace a composite's parts with a refined design, keeping where it stands.
+    mutating func replaceDesign(_ id: String, with spec: ModelSpec, design: String?) {
+        let s = spec.sanitized().grounded()
+        update(id) { obj in
+            obj.parts = s.parts.map { p in
+                SceneObject(shape: p.shape, name: p.name, color: p.color, position: p.position, rotation: p.rotation,
+                            size: p.size, material: p.material, param: p.param)
+            }
+            obj.size = s.extent
+            obj.name = s.name
+            obj.color = Self.dominantColor(s)
+            obj.design = design
+        }
+    }
+
+    /// The colour covering most of a model (by volume), used to refer to it ("the red car").
+    static func dominantColor(_ spec: ModelSpec) -> String {
+        var weight: [String: Float] = [:]
+        for p in spec.parts where p.material != "glass" && p.material != "emissive" {
+            weight[p.color, default: 0] += p.size.x * p.size.y * p.size.z
+        }
+        return weight.max { $0.value < $1.value }?.key ?? "cyan"
     }
 
     /// Duplicate objects `count` times, each placed in the nearest free spot beside the previous copy.

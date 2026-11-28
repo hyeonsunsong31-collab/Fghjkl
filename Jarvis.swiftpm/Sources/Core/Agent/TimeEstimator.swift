@@ -11,7 +11,7 @@ struct TimeEstimator: Codable {
 
     static let defaults: [String: Double] = [
         "fastCommand": 0.2, "conversational": 2.5, "toolUse": 4, "clarify": 1.5, "deepThink": 12,
-        "generateModel": 8, "webSearch": 4, "playMusic": 3, "exportModel": 2, "openApp": 0.6
+        "generateModel": 3, "refineModel": 2, "webSearch": 4, "playMusic": 3, "exportModel": 2, "openApp": 0.6
     ]
 
     mutating func record(key: String, seconds: Double) {

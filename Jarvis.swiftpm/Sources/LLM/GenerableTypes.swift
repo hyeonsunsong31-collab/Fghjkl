@@ -420,8 +420,9 @@ extension FilesTool.Arguments: Generable {
     }
 }
 
-/// One primitive of a model designed by the language model.
+/// One primitive of a model designed by the language model (see `DesignPrompt.guide`).
 struct GeneratedPart {
+    var name: String
     var shape: String
     var x: Double
     var y: Double
@@ -429,28 +430,40 @@ struct GeneratedPart {
     var width: Double
     var height: Double
     var depth: Double
-    var rotation: Double
+    var rx: Double
+    var ry: Double
+    var rz: Double
     var color: String
+    var material: String
+    var mirror: Int
+    var radial: Int
 
     static var generationSchema: GenerationSchema {
         GenerationSchema(
             type: Self.self,
             properties: [
-                GenerationSchema.Property(name: "shape", description: "One of: cube, sphere, cylinder, cone, torus, capsule, pyramid, plane", type: String.self),
-                GenerationSchema.Property(name: "x", description: "Centre X position in metres (left/right), typically between -0.5 and 0.5", type: Double.self),
-                GenerationSchema.Property(name: "y", description: "Centre Y position in metres (up), typically between 0 and 1", type: Double.self),
-                GenerationSchema.Property(name: "z", description: "Centre Z position in metres (front/back), typically between -0.5 and 0.5", type: Double.self),
-                GenerationSchema.Property(name: "width", description: "Width in metres", type: Double.self),
-                GenerationSchema.Property(name: "height", description: "Height in metres", type: Double.self),
-                GenerationSchema.Property(name: "depth", description: "Depth in metres", type: Double.self),
-                GenerationSchema.Property(name: "rotation", description: "Rotation about the vertical axis in degrees", type: Double.self),
-                GenerationSchema.Property(name: "color", description: "Colour name: red, orange, yellow, green, cyan, blue, purple, pink, white, black, gray or gold", type: String.self)
+                GenerationSchema.Property(name: "name", description: "What the part is: body, wheel, window, leg, roof, door, light…", type: String.self),
+                GenerationSchema.Property(name: "shape", description: "cube, roundedCube, sphere, hemisphere, cylinder, halfCylinder, tube, cone, frustum, torus, capsule, pyramid, wedge, prism, plane, cup, bowl, bottle, vase or ogive", type: String.self),
+                GenerationSchema.Property(name: "x", description: "Centre x in metres (right)", type: Double.self),
+                GenerationSchema.Property(name: "y", description: "Centre y in metres (up; floor is 0)", type: Double.self),
+                GenerationSchema.Property(name: "z", description: "Centre z in metres (toward the viewer)", type: Double.self),
+                GenerationSchema.Property(name: "width", description: "Full size along x in metres", type: Double.self),
+                GenerationSchema.Property(name: "height", description: "Full size along y in metres", type: Double.self),
+                GenerationSchema.Property(name: "depth", description: "Full size along z in metres", type: Double.self),
+                GenerationSchema.Property(name: "rx", description: "Rotation about x in degrees", type: Double.self),
+                GenerationSchema.Property(name: "ry", description: "Rotation about y in degrees", type: Double.self),
+                GenerationSchema.Property(name: "rz", description: "Rotation about z in degrees", type: Double.self),
+                GenerationSchema.Property(name: "color", description: "Colour name", type: String.self),
+                GenerationSchema.Property(name: "material", description: "paint, plastic, metal, chrome, glass, rubber, wood, stone, fabric or emissive", type: String.self),
+                GenerationSchema.Property(name: "mirror", description: "1 to also place a mirrored copy at -x, else 0", type: Int.self),
+                GenerationSchema.Property(name: "radial", description: "Copies around the vertical axis (1 = just this part)", type: Int.self)
             ]
         )
     }
 
     var generatedContent: GeneratedContent {
         let properties: [(name: String, value: any ConvertibleToGeneratedContent)] = [
+            (name: "name", value: self.name),
             (name: "shape", value: self.shape),
             (name: "x", value: self.x),
             (name: "y", value: self.y),
@@ -458,14 +471,20 @@ struct GeneratedPart {
             (name: "width", value: self.width),
             (name: "height", value: self.height),
             (name: "depth", value: self.depth),
-            (name: "rotation", value: self.rotation),
-            (name: "color", value: self.color)
+            (name: "rx", value: self.rx),
+            (name: "ry", value: self.ry),
+            (name: "rz", value: self.rz),
+            (name: "color", value: self.color),
+            (name: "material", value: self.material),
+            (name: "mirror", value: self.mirror),
+            (name: "radial", value: self.radial)
         ]
         return GeneratedContent(properties: properties, uniquingKeysWith: { _, second in second })
     }
 
     struct PartiallyGenerated: Identifiable, ConvertibleFromGeneratedContent {
         var id: GenerationID
+        var name: String.PartiallyGenerated?
         var shape: String.PartiallyGenerated?
         var x: Double.PartiallyGenerated?
         var y: Double.PartiallyGenerated?
@@ -473,11 +492,17 @@ struct GeneratedPart {
         var width: Double.PartiallyGenerated?
         var height: Double.PartiallyGenerated?
         var depth: Double.PartiallyGenerated?
-        var rotation: Double.PartiallyGenerated?
+        var rx: Double.PartiallyGenerated?
+        var ry: Double.PartiallyGenerated?
+        var rz: Double.PartiallyGenerated?
         var color: String.PartiallyGenerated?
+        var material: String.PartiallyGenerated?
+        var mirror: Int.PartiallyGenerated?
+        var radial: Int.PartiallyGenerated?
 
         init(_ content: GeneratedContent) throws {
             self.id = content.id ?? GenerationID()
+            self.name = try content.value(forProperty: "name")
             self.shape = try content.value(forProperty: "shape")
             self.x = try content.value(forProperty: "x")
             self.y = try content.value(forProperty: "y")
@@ -485,14 +510,20 @@ struct GeneratedPart {
             self.width = try content.value(forProperty: "width")
             self.height = try content.value(forProperty: "height")
             self.depth = try content.value(forProperty: "depth")
-            self.rotation = try content.value(forProperty: "rotation")
+            self.rx = try content.value(forProperty: "rx")
+            self.ry = try content.value(forProperty: "ry")
+            self.rz = try content.value(forProperty: "rz")
             self.color = try content.value(forProperty: "color")
+            self.material = try content.value(forProperty: "material")
+            self.mirror = try content.value(forProperty: "mirror")
+            self.radial = try content.value(forProperty: "radial")
         }
     }
 }
 
 extension GeneratedPart: Generable {
     init(_ content: GeneratedContent) throws {
+        self.name = try content.value(forProperty: "name")
         self.shape = try content.value(forProperty: "shape")
         self.x = try content.value(forProperty: "x")
         self.y = try content.value(forProperty: "y")
@@ -500,8 +531,13 @@ extension GeneratedPart: Generable {
         self.width = try content.value(forProperty: "width")
         self.height = try content.value(forProperty: "height")
         self.depth = try content.value(forProperty: "depth")
-        self.rotation = try content.value(forProperty: "rotation")
+        self.rx = try content.value(forProperty: "rx")
+        self.ry = try content.value(forProperty: "ry")
+        self.rz = try content.value(forProperty: "rz")
         self.color = try content.value(forProperty: "color")
+        self.material = try content.value(forProperty: "material")
+        self.mirror = try content.value(forProperty: "mirror")
+        self.radial = try content.value(forProperty: "radial")
     }
 }
 
@@ -515,7 +551,7 @@ struct GeneratedModelSpec {
             type: Self.self,
             properties: [
                 GenerationSchema.Property(name: "name", description: "Short name of the object", type: String.self),
-                GenerationSchema.Property(name: "parts", description: "Primitive parts that together form a recognisable model of the object", type: [GeneratedPart].self, guides: [.maximumCount(24)])
+                GenerationSchema.Property(name: "parts", description: "Parts that together form a recognisable, well-proportioned model with every requested detail", type: [GeneratedPart].self, guides: [.maximumCount(28)])
             ]
         )
     }

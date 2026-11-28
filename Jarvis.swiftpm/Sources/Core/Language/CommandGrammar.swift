@@ -8,7 +8,7 @@ enum CommandIntent: String, Codable, CaseIterable {
     case deepThinkOn, deepThinkOff, setVoice, speakFaster, speakSlower, setLanguage
     // 3D project space
     case open3D, close3D, handTrackingOn, handTrackingOff
-    case createObject, generateModel, cloneObject, deleteObject, selectObject
+    case createObject, generateModel, refineModel, setRenderStyle, cloneObject, deleteObject, selectObject
     case moveObject, scaleObject, rotateObject, colorObject
     case undo, redo, exportModel, saveWallpaper, clearScene, resetCamera
     // Media & web
@@ -26,7 +26,7 @@ enum CommandIntent: String, Codable, CaseIterable {
              .showBrain, .openSettings, .resumeTask, .cancelTask, .deepThinkOn, .deepThinkOff, .setVoice,
              .speakFaster, .speakSlower, .setLanguage:
             return .systemControl
-        case .open3D, .close3D, .handTrackingOn, .handTrackingOff, .createObject, .generateModel, .cloneObject,
+        case .open3D, .close3D, .handTrackingOn, .handTrackingOff, .createObject, .generateModel, .refineModel, .setRenderStyle, .cloneObject,
              .deleteObject, .selectObject, .moveObject, .scaleObject, .rotateObject, .colorObject, .undo, .redo,
              .exportModel, .saveWallpaper, .clearScene, .resetCamera:
             return .command3D
@@ -173,7 +173,19 @@ struct CommandGrammar {
 
     func parse(_ text: String) -> GrammarResult {
         let language = LanguageDetector.detect(text).language
-        let pieces = Self.split(text)
+        let commands = parsePieces(Self.split(text))
+        // A detailed design request ("a red car with black wheels and a spoiler") is one command:
+        // splitting it at "and" would scatter its details. Sentences that also ask for other
+        // things ("open the 3D space and make a castle") keep their separate commands.
+        let designIntents: Set<CommandIntent> = [.generateModel, .createObject, .colorObject, .scaleObject, .refineModel]
+        if Self.isSingleDesignRequest(text), commands.allSatisfy({ designIntents.contains($0.intent) }),
+           let whole = parseClause(Clause(text)), whole.intent == .generateModel {
+            return GrammarResult(commands: [whole], language: language)
+        }
+        return GrammarResult(commands: commands, language: language)
+    }
+
+    private func parsePieces(_ pieces: [String]) -> [Command] {
         var commands: [Command] = []
         var pending = ""
         for piece in pieces {
@@ -202,7 +214,18 @@ struct CommandGrammar {
         if !pending.isEmpty, commands.isEmpty, let cmd = parseClause(Clause(pending)) { commands.append(cmd) }
 
         // Resolve pronoun-only follow-ups ("clone it", "make it bigger") — handled by the scene resolver.
-        return GrammarResult(commands: commands, language: language)
+        return commands
+    }
+
+    /// Names an object to design, with no "then"/"그 다음" sequencing of separate commands.
+    static func isSingleDesignRequest(_ text: String) -> Bool {
+        let lower = " " + text.lowercased() + " "
+        let sequencing = [" then ", " after that ", "; ", "그 다음", "그다음", "그리고 나서", "한 다음", "한 후에", "하고 나서"]
+        if sequencing.contains(where: { lower.contains($0) }) { return false }
+        let creating = ["make", "create", "build", "design", "generate", "draw", "model", "give me",
+                        "만들", "생성", "설계", "그려", "모델링"]
+        guard creating.contains(where: { lower.contains($0) }) else { return false }
+        return !Lexed(text).matches(DesignVocabulary.subjects).isEmpty
     }
 
     /// Split into candidate clauses on conjunctions.
@@ -231,7 +254,8 @@ struct CommandGrammar {
         guard !c.tokens.isEmpty else { return nil }
         var best: Command?
         func consider(_ intent: CommandIntent, _ base: Float, _ params: [String: String] = [:]) {
-            let conf = base * coverage(c)
+            // Design requests are meant to be long and detailed: no penalty for extra words.
+            let conf = intent == .generateModel || intent == .refineModel ? base : base * coverage(c)
             if conf > (best?.confidence ?? 0) {
                 best = Command(intent: intent, parameters: params, confidence: conf, text: c.original)
             }
@@ -334,7 +358,33 @@ struct CommandGrammar {
 
         let scaleCue = c.has(["bigger", "larger", "smaller", "twice as", "as big", "as large", "times bigger", "크게", "작게", "키워", "줄여"])
         let isCreate = c.has(create) && !(scaleCue && c.has(["make", "만들"]) && Self.count(in: c) == nil && !c.has(["new", "another", "새"]))
-        if isCreate, let shape = shapeParam {
+
+        // --- Detailed designs and refinements of the design in the workspace ---------
+        let designLex = Lexed(c.original)
+        let designSubjects = designLex.matches(DesignVocabulary.subjects)
+        let designParts = designLex.matches(DesignVocabulary.components)
+        let subjectOnly = designSubjects.filter { s in !designParts.contains { $0.span == s.span } }
+        let editCue = c.has(["add", "attach", "put on", "remove", "delete", "take off", "get rid of", "change", "paint", "replace", "swap",
+                             "more", "fewer", "bigger", "smaller", "larger", "longer", "shorter", "taller", "thicker", "thinner",
+                             "make the", "make its", "make it", "turn the", "give it", "give the", "without",
+                             "추가", "달아", "붙여", "빼", "없애", "제거", "떼어", "바꿔", "변경", "칠해", "크게", "작게", "키워", "줄여", "늘려",
+                             "길게", "짧게", "두껍게", "얇게", "더 달아", "하나 더"])
+        let definite: Bool = designLex.korean
+            ? (!c.has(["만들", "생성", "설계", "그려"]) || c.has(["바꿔", "변경", "칠해", "추가", "빼", "없애", "제거", "달아"]))
+            : subjectOnly.contains { (m: Match) -> Bool in m.span.start > 0 && ["the", "my", "this", "that", "your", "its", "our"].contains(designLex.tokens[m.span.start - 1]) }
+        let refining = !designParts.isEmpty && editCue && !c.has(["new", "another", "새로운", "새 "]) && (subjectOnly.isEmpty || definite)
+        if refining {
+            consider(.refineModel, 0.94, ["request": c.original])
+        }
+        let style = c.has(["hologram mode", "holographic mode", "hologram style", "as holograms", "홀로그램 모드", "홀로그램 스타일", "홀로그램으로 보여"])
+            ? "hologram"
+            : (c.has(["realistic mode", "solid mode", "real materials", "realistic materials", "실사 모드", "실제 재질", "재질 모드", "현실적으로 보여"]) ? "solid" : nil)
+        if let style { consider(.setRenderStyle, 0.93, ["style": style]) }
+
+        if isCreate && !refining && !designSubjects.isEmpty && !c.has(space3D.filter { $0 != "3d" && $0 != "3디" }) {
+            let description = Self.residue(c, removing: create + ["3d", "model", "hologram", "object", "모델", "홀로그램", "오브젝트", "객체", "a", "an", "the"])
+            consider(.generateModel, 0.93, ["description": description, "request": c.original])
+        } else if isCreate, let shape = shapeParam {
             var p: [String: String] = ["shape": shape, "count": String(count ?? 1)]
             if let col = colorParam { p["color"] = col }
             if let size = Self.sizeAdjective(in: c) { p["size"] = size }
@@ -342,8 +392,8 @@ struct CommandGrammar {
             consider(.createObject, 0.95, p)
         } else if isCreate && !c.has(space3D) && !c.has(["timer", "alarm", "타이머", "알람", "note", "메모", "event", "일정", "reminder", "미리 알림", "shortcut", "단축어", "playlist"]) {
             let description = Self.residue(c, removing: create + ["3d", "model", "hologram", "object", "모델", "홀로그램", "오브젝트", "객체", "a", "an"])
-            if !description.isEmpty {
-                consider(.generateModel, 0.72, ["description": description] .merging(colorParam.map { ["color": $0] } ?? [:]) { a, _ in a })
+            if !description.isEmpty && !refining {
+                consider(.generateModel, 0.8, ["description": description, "request": c.original])
             }
         }
 

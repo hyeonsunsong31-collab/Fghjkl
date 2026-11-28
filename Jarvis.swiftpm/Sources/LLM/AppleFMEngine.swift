@@ -184,20 +184,40 @@ final class AppleFMEngine: LanguageEngine {
 
 // MARK: - 3D model design with guided generation
 
+/// Designs parts with Apple Intelligence from a brief-based `DesignPrompt` (the parametric
+/// library covers known objects; this handles anything else and extra requested parts).
 @MainActor
 enum AppleFMDesigner {
-    static func design(_ description: String, language: DetectedLanguage) async throws -> ModelSpec {
-        let session = LanguageModelSession(instructions: """
-        You are a 3D modelling assistant. Compose recognisable objects from simple primitives \
-        (cube, sphere, cylinder, cone, torus, capsule, pyramid, plane). Use metres; the object should be about 0.5 to 1 metre tall, \
-        resting on the floor (y = 0 is the floor). Use between 4 and 20 parts.
-        """)
-        let response = try await session.respond(to: "Design: \(description)", generating: GeneratedModelSpec.self)
-        let spec = response.content
-        return ModelSpec(name: spec.name, parts: spec.parts.map {
-            ModelSpec.Part(shape: $0.shape, position: SIMD3(Float($0.x), Float($0.y), Float($0.z)),
-                           size: SIMD3(Float(max(0.01, $0.width)), Float(max(0.01, $0.height)), Float(max(0.01, $0.depth))),
-                           rotationY: Float($0.rotation), color: $0.color)
-        })
+    static var isAvailable: Bool {
+        if case .available = SystemLanguageModel.default.availability { return true }
+        return false
+    }
+
+    /// The designed parts (mirror and radial copies expanded), or nil when unavailable or failed.
+    static func design(_ prompt: DesignPrompt) async -> ModelSpec? {
+        guard isAvailable else { return nil }
+        do {
+            let session = LanguageModelSession(instructions: prompt.instructions)
+            let options = GenerationOptions(temperature: 0.35, maximumResponseTokens: 2600)
+            let response = try await session.respond(to: prompt.prompt, generating: GeneratedModelSpec.self, options: options)
+            return convert(response.content)
+        } catch {
+            let message = error.localizedDescription
+            Log.agent.error("Design generation failed: \(message, privacy: .public)")
+            return nil
+        }
+    }
+
+    static func convert(_ generated: GeneratedModelSpec) -> ModelSpec {
+        var parts: [ModelSpec.Part] = []
+        for g in generated.parts {
+            let position = SIMD3<Float>(Float(g.x), Float(g.y), Float(g.z))
+            let size = SIMD3<Float>(Float(abs(g.width)), Float(abs(g.height)), Float(abs(g.depth)))
+            let rotation = SIMD3<Float>(Float(g.rx), Float(g.ry), Float(g.rz))
+            let part = ModelSpec.Part(name: g.name, shape: g.shape, position: position, size: size, rotation: rotation,
+                                      color: g.color.lowercased(), material: g.material)
+            parts += part.expanded(mirror: g.mirror > 0, radial: g.radial)
+        }
+        return ModelSpec(name: generated.name, parts: parts)
     }
 }

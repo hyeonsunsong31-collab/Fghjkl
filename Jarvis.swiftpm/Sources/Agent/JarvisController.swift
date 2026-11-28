@@ -114,6 +114,7 @@ final class JarvisController {
         let defaults = UserDefaults.standard
         if defaults.bool(forKey: "JarvisSkipOnboarding") { records.setSetting("onboarded", "1") }
         if defaults.bool(forKey: "JarvisNoMic") { micMuted = true }
+        if defaults.bool(forKey: "JarvisResetScene") { scene.clear() }
         let onboarded = records.setting("onboarded") == "1" || defaults.bool(forKey: "JarvisSkipOnboarding")
         if !onboarded { activePanel = .onboarding }
         // Tell the user (and whoever helps them) why the previous session ended, if it crashed.
