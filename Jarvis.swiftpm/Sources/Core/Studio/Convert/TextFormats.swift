@@ -677,20 +677,20 @@ enum CSVFormat {
 
 // MARK: - XML and property lists
 
-final class XMLNode {
+final class XMLElementNode {
     var name: String
     var attributes: [(String, String)] = []
-    var children: [XMLNode] = []
+    var children: [XMLElementNode] = []
     var text = ""
 
     init(name: String) { self.name = name }
 }
 
 enum XMLFormat {
-    static func parseTree(_ text: String) throws -> XMLNode {
+    static func parseTree(_ text: String) throws -> XMLElementNode {
         let s = Array(text.unicodeScalars)
         var i = 0
-        let root = XMLNode(name: "#document")
+        let root = XMLElementNode(name: "#document")
         var stack = [root]
         func line() -> Int { s[0..<Swift.min(i, s.count)].filter { $0 == "\n" }.count + 1 }
         while i < s.count {
@@ -745,10 +745,10 @@ enum XMLFormat {
         return top
     }
 
-    private static func element(_ inside: String, line: Int) throws -> XMLNode {
+    private static func element(_ inside: String, line: Int) throws -> XMLElementNode {
         let trimmed = inside.trimmingCharacters(in: .whitespacesAndNewlines)
         let nameEnd = trimmed.firstIndex(where: { $0.isWhitespace }) ?? trimmed.endIndex
-        let node = XMLNode(name: String(trimmed[..<nameEnd]))
+        let node = XMLElementNode(name: String(trimmed[..<nameEnd]))
         var rest = Substring(trimmed[nameEnd...])
         while true {
             rest = rest.drop { $0.isWhitespace }
@@ -819,7 +819,7 @@ enum XMLFormat {
         return .object([DataPair(key: root.name, value: value(root))])
     }
 
-    static func value(_ node: XMLNode) -> DataValue {
+    static func value(_ node: XMLElementNode) -> DataValue {
         let text = node.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if node.attributes.isEmpty && node.children.isEmpty { return text.isEmpty ? .null : DataValue.infer(text) }
         var pairs: [DataPair] = node.attributes.map { DataPair(key: "@" + $0.0, value: DataValue.infer($0.1)) }
@@ -880,7 +880,7 @@ enum XMLFormat {
 }
 
 enum PlistFormat {
-    static func value(_ node: XMLNode) throws -> DataValue {
+    static func value(_ node: XMLElementNode) throws -> DataValue {
         let n = node.name == "plist" ? (node.children.first ?? node) : node
         switch n.name {
         case "dict":

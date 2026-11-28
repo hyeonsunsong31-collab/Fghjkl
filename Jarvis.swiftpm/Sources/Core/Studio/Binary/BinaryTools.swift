@@ -145,7 +145,7 @@ enum BinaryTools {
 enum BinaryInspector {
     static func report(_ bytes: [UInt8], filename: String) -> String {
         let kind = FileKind.detect(bytes, filename: filename)
-        var lines = ["\(filename): \(kind.name) · \(ByteCountFormatter.string(fromByteCount: Int64(bytes.count), countStyle: .file)) · sha256 \(SHA256.hex(bytes).prefix(16))…"]
+        var lines = ["\(filename): \(kind.name) · \(ByteCountFormatter.string(fromByteCount: Int64(bytes.count), countStyle: .file)) · sha256 \(PortableSHA256.hex(bytes).prefix(16))…"]
         switch kind.id {
         case "pe":
             if let pe = PEInfo.parse(bytes) { lines.append(pe.report()) }

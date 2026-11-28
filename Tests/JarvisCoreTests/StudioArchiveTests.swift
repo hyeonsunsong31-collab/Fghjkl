@@ -7,10 +7,10 @@ final class StudioArchiveTests: XCTestCase {
     func testChecksums() {
         XCTAssertEqual(CRC32.checksum(Array("123456789".utf8)), 0xCBF4_3926)
         XCTAssertEqual(Adler32.checksum(Array("Wikipedia".utf8)), 0x11E6_0398)
-        XCTAssertEqual(SHA256.hex(Array("abc".utf8)), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-        XCTAssertEqual(SHA256.hex([UInt8]()), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        XCTAssertEqual(PortableSHA256.hex(Array("abc".utf8)), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        XCTAssertEqual(PortableSHA256.hex([UInt8]()), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
         let long = [UInt8](repeating: 0x61, count: 1000)
-        XCTAssertEqual(SHA256.hex(long), "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3")
+        XCTAssertEqual(PortableSHA256.hex(long), "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3")
     }
 
     func testDeflateRoundTrip() throws {

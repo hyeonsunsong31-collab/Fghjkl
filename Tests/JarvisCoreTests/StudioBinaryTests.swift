@@ -46,7 +46,7 @@ final class StudioBinaryTests: XCTestCase {
         XCTAssertEqual(pe.versionStrings["ProductName"], "Jarvis package")
         XCTAssertTrue(pe.manifest?.contains("asInvoker") ?? false)
         XCTAssertNil(pe.overlayOffset)
-        XCTAssertEqual(SHA256.hex(ExeStub.bytes), ExeStub.sha256)
+        XCTAssertEqual(PortableSHA256.hex(ExeStub.bytes), ExeStub.sha256)
         XCTAssertTrue(pe.report().contains("Requested privileges: asInvoker"))
     }
 
