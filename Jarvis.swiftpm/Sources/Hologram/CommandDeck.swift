@@ -23,8 +23,12 @@ struct CommandDeck: View {
         let j = jarvis
         let say: (String, String) -> () -> Void = { en, kr in { j.submit(j.currentLanguage == .korean ? kr : en, modality: .button) } }
         let holographic: Bool = j.scene.renderStyle == .hologram
-        let styleLabel: (String, String) = holographic ? ("REALISTIC", "실사 재질") : ("HOLOGRAM", "홀로그램")
-        let styleCommand: (String, String) = holographic ? ("realistic mode", "실사 모드") : ("hologram mode", "홀로그램 모드")
+        var styleLabel: (String, String) = ("HOLOGRAM", "홀로그램")
+        var styleCommand: (String, String) = ("hologram mode", "홀로그램 모드")
+        if holographic {
+            styleLabel = ("REALISTIC", "실사 재질")
+            styleCommand = ("realistic mode", "실사 모드")
+        }
         let modelling: [Item] = [
             Item(icon: "hand.raised.fingers.spread.fill", en: "HANDS", ko: "손 인식", active: j.handTrackingEnabled, tint: Holo.amber) {
                 Task { await j.setHandTracking(!j.handTrackingEnabled) }

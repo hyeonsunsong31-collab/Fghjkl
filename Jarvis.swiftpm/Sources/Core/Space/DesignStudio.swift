@@ -196,19 +196,25 @@ enum DesignReport {
         var details: [String] = []
         var described = Set<String>()
         for (component, n) in b.counts.sorted(by: { $0.key < $1.key }) {
+            described.insert(component)
+            // The name already says it ("2-storey house").
+            if component == "floor" && o.spec.name.lowercased().contains("storey") { continue }
+            if component == "floor" && o.spec.name.lowercased().contains("floor") { continue }
             let color = b.colors[component].map { "\(colorName($0)) " } ?? ""
             details.append(component == "floor" ? "\(n) \(n == 1 ? "storey" : "storeys")" : "\(n) \(color)\(plural(component, n))")
-            described.insert(component)
         }
         for (component, c) in b.colors.sorted(by: { $0.key < $1.key }) where !described.contains(component) && component != "main" && component != "accent" {
-            details.append("\(article(colorName(c))) \(colorName(c)) \(component)")
+            let many = DesignValidator.countParts(o.spec, component) > 1 && !singular.contains(component)
+            details.append(many ? "\(colorName(c)) \(plural(component, 2))" : "\(article(colorName(c))) \(colorName(c)) \(component)")
             described.insert(component)
         }
         for feature in b.features where !described.contains(feature) && !DesignLibrary.generic.contains(feature) && !o.unhandled.contains(feature) {
-            details.append(article(feature) + " " + feature)
+            let many = DesignValidator.countParts(o.spec, feature) > 1 && !singular.contains(feature)
+            details.append(many ? plural(feature, 2) : article(feature) + " " + feature)
         }
-        var head = "I've designed " + article(o.spec.name.lowercased()) + " " + o.spec.name.lowercased()
-        if let main = b.colors["main"] { head += " in \(colorName(main))" }
+        let name = o.spec.name.lowercased()
+        let described0 = b.colors["main"].map { colorName($0) + " " + name } ?? name
+        var head = "I've designed " + article(described0) + " " + described0
         if let accent = b.colors["accent"] { head += " with \(colorName(accent)) accents" }
         var text = head
         if !details.isEmpty { text += " with " + list(details) }
@@ -224,6 +230,9 @@ enum DesignReport {
         }
         return text
     }
+
+    /// Parts built from several pieces that are still one thing (a gable roof has two halves).
+    static let singular: Set<String> = ["roof", "body", "cabin", "base", "deck", "visor", "keep", "cargo", "tabletop", "blanket", "headboard"]
 
     private static func list(_ items: [String]) -> String {
         if items.count <= 1 { return items.first ?? "" }
@@ -264,7 +273,7 @@ enum DesignReport {
             if component == "main" {
                 items.append(ko ? "전체 색 \(koreanColor(color))" : "the main colour is now \(colorName(color))")
             } else {
-                let many = DesignValidator.countParts(o.spec, component) > 1
+                let many = DesignValidator.countParts(o.spec, component) > 1 && !singular.contains(component)
                 items.append(ko ? "\(koreanColor(color)) \(koreanName(component))"
                                 : "the \(many ? plural(component, 2) : component) \(many ? "are" : "is") now \(colorName(color))")
             }
@@ -310,9 +319,10 @@ enum DesignReport {
         var details: [String] = []
         var described = Set<String>()
         for (component, n) in b.counts.sorted(by: { $0.key < $1.key }) {
-            let color = b.colors[component].map { koreanColor($0) + " " } ?? ""
-            details.append(component == "floor" ? "\(n)층" : "\(color)\(koreanName(component)) \(n)개")
             described.insert(component)
+            if component == "floor" { continue } // already in the name ("2층 집")
+            let color = b.colors[component].map { koreanColor($0) + " " } ?? ""
+            details.append("\(color)\(koreanName(component)) \(n)개")
         }
         for (component, c) in b.colors.sorted(by: { $0.key < $1.key }) where !described.contains(component) && component != "main" && component != "accent" {
             details.append("\(koreanColor(c)) \(koreanName(component))")
@@ -326,8 +336,11 @@ enum DesignReport {
         if let main = b.colors["main"] { head += koreanColor(main) + " " }
         head += name
         var text = "\(head)\(Hangul.objectParticle(for: name)) 설계했습니다."
-        if !details.isEmpty { text += " " + details.joined(separator: ", ") + "\(details.count == 1 ? "을(를)" : "") 반영해" }
-        text += details.isEmpty ? " 총 \(o.spec.parts.count)개 부품입니다." : " 총 \(o.spec.parts.count)개 부품으로 만들었습니다."
+        if let last = details.last {
+            text += " " + details.joined(separator: ", ") + Hangul.objectParticle(for: last) + " 반영해 총 \(o.spec.parts.count)개 부품으로 만들었습니다."
+        } else {
+            text += " 총 \(o.spec.parts.count)개 부품입니다."
+        }
         if !o.unhandled.isEmpty {
             text += " 다만 " + o.unhandled.map(koreanName).joined(separator: ", ") + "\(Hangul.objectParticle(for: koreanName(o.unhandled.last ?? ""))) 추가할 부품이 없어 넣지 못했습니다."
         }

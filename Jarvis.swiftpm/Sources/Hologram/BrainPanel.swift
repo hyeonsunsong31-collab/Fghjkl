@@ -141,8 +141,8 @@ struct BrainPanel: View {
         switch region.system {
         case .cortex:
             // Shell of an ellipsoid; layer depth shrinks the radius slightly.
-            let theta = fw * .pi              // left ↔ right
-            let phi = fv * .pi * 0.95 + 0.1     // bottom ↔ top
+            let theta = fw * Float.pi              // left ↔ right
+            let phi = fv * Float.pi * 0.95 + 0.1     // bottom ↔ top
             let depth: Float = {
                 switch region {
                 case .cortexL1: return 1.0
@@ -155,7 +155,7 @@ struct BrainPanel: View {
             let ap = (fu - 0.5) * 0.25
             return SIMD3(cos(theta) * sin(phi) * 0.82 * depth, cos(phi) * 0.62 * depth + 0.15, sin(theta) * sin(phi) * 1.0 * depth + ap) * SIMD3(1, 1, 1)
         case .cerebellum:
-            let fold = sin(fv * 16 * .pi) * 0.04
+            let fold = sin(fv * 16 * Float.pi) * 0.04
             return SIMD3((fw - 0.5) * 0.9, -0.48 + (fv - 0.5) * 0.25 + fold, -0.55 - (fu - 0.5) * 0.35)
         default:
             return SIMD3((fw - 0.5) * 0.42, -0.1 + (fv - 0.5) * 0.5, (fu - 0.5) * 0.4)

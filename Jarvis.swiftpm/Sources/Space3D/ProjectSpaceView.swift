@@ -149,7 +149,7 @@ struct ProjectSpaceView: UIViewRepresentable {
                 lastRotation = 0
             case .changed:
                 if let id = rotateTarget {
-                    scene.rotateObject(id: id, byDegrees: -Float(g.rotation - lastRotation) * 180 / .pi)
+                    scene.rotateObject(id: id, byDegrees: -Float(g.rotation - lastRotation) * 180 / Float.pi)
                 }
                 lastRotation = g.rotation
             default:

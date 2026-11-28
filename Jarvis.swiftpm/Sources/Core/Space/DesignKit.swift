@@ -93,7 +93,7 @@ struct DesignKit {
         let d = SIMD3<Float>(b.x - a.x, 0, b.z - a.z)
         let length = simdLength(d) - 2 * trim
         guard length > 0.001 else { return }
-        let angle = atan2(-d.z, d.x) * 180 / .pi
+        let angle = atan2(-d.z, d.x) * 180 / Float.pi
         let mid = SIMD3<Float>((a.x + b.x) / 2, y, (a.z + b.z) / 2)
         add(name, "cube", at: mid, size: v3(length, h, t), rot: v3(0, angle, 0), color: color, material: material)
     }

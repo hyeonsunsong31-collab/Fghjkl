@@ -181,7 +181,7 @@ enum MeshGenerator {
             let core = Swift.max(half - r, 0)
             var lo: [Float] = []
             for k in stride(from: steps, through: 1, by: -1) {
-                let a = Float(k) / Float(steps) * (.pi / 4)
+                let a = Float(k) / Float(steps) * (Float.pi / 4)
                 lo.append(-(core + r * tan(a)))
             }
             let mid: [Float] = core > 0 ? [-core, 0, core] : [0]
@@ -239,7 +239,7 @@ enum MeshGenerator {
                 n2 = len > 0 ? n2 / len : SIMD2(1, 0)
                 let p = path[k]
                 for j in 0...segments {
-                    let a = Float(j) / Float(segments) * 2 * .pi
+                    let a = Float(j) / Float(segments) * 2 * Float.pi
                     let c = cos(a), s = sin(a)
                     m.positions.append(SIMD3(p.x * c, p.y, p.x * s))
                     m.normals.append(SIMD3(n2.x * c, n2.y, n2.x * s))
@@ -267,7 +267,7 @@ enum MeshGenerator {
 
     static func domeProfile(steps: Int = 12) -> [[SIMD2<Float>]] {
         let arc = (0...steps).map { k -> SIMD2<Float> in
-            let a = Float(k) / Float(steps) * (.pi / 2)
+            let a = Float(k) / Float(steps) * (Float.pi / 2)
             return SIMD2(0.5 * cos(a), -0.5 + sin(a))
         }
         return [[SIMD2(0, -0.5), SIMD2(0.5, -0.5)], arc]
@@ -289,12 +289,12 @@ enum MeshGenerator {
 
     static func bowlProfile(steps: Int = 12) -> [[SIMD2<Float>]] {
         let outer = (0...steps).map { k -> SIMD2<Float> in
-            let a = -Float.pi / 2 + Float(k) / Float(steps) * (.pi / 2)
+            let a = -Float.pi / 2 + Float(k) / Float(steps) * (Float.pi / 2)
             return SIMD2(0.5 * cos(a), 0.5 + sin(a))
         }
         let ri: Float = 0.45, depth: Float = 0.9
         let inner = (0...steps).map { k -> SIMD2<Float> in
-            let a = -Float(k) / Float(steps) * (.pi / 2)
+            let a = -Float(k) / Float(steps) * (Float.pi / 2)
             return SIMD2(ri * cos(a), 0.5 + depth * sin(a))
         }
         return [outer, [SIMD2(0.5, 0.5), SIMD2(ri, 0.5)], inner]
@@ -327,10 +327,10 @@ enum MeshGenerator {
         let rings = Swift.max(8, segments / 2)
         for i in 0...rings {
             let v = Float(i) / Float(rings)
-            let phi = v * .pi
+            let phi = v * Float.pi
             for j in 0...segments {
                 let u = Float(j) / Float(segments)
-                let theta = u * 2 * .pi
+                let theta = u * 2 * Float.pi
                 let n = SIMD3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta))
                 m.positions.append(n * r)
                 m.normals.append(n)
@@ -358,10 +358,10 @@ enum MeshGenerator {
     static func torus(majorRadius R: Float, minorRadius r: Float, segments: Int, sides: Int) -> MeshData {
         var m = MeshData()
         for i in 0...segments {
-            let u = Float(i) / Float(segments) * 2 * .pi
+            let u = Float(i) / Float(segments) * 2 * Float.pi
             let center = SIMD3(R * cos(u), 0, R * sin(u))
             for j in 0...sides {
-                let v = Float(j) / Float(sides) * 2 * .pi
+                let v = Float(j) / Float(sides) * 2 * Float.pi
                 let n = SIMD3(cos(v) * cos(u), sin(v), cos(v) * sin(u))
                 m.positions.append(center + n * r)
                 m.normals.append(n)
@@ -391,11 +391,11 @@ enum MeshGenerator {
         let steps = Swift.max(4, segments / 4)
         var path: [SIMD2<Float>] = []
         for k in 0...steps {
-            let a = -Float.pi / 2 + Float(k) / Float(steps) * (.pi / 2)
+            let a = -Float.pi / 2 + Float(k) / Float(steps) * (Float.pi / 2)
             path.append(SIMD2(r * cos(a), -body + r * sin(a)))
         }
         for k in 0...steps {
-            let a = Float(k) / Float(steps) * (.pi / 2)
+            let a = Float(k) / Float(steps) * (Float.pi / 2)
             path.append(SIMD2(r * cos(a), body + r * sin(a)))
         }
         return lathe([path], segments: segments)
@@ -416,7 +416,7 @@ enum MeshGenerator {
         for (k, p) in points.enumerated() {
             m.positions.append(p)
             m.normals.append(normal)
-            let a = Float(k) / Float(points.count) * 2 * .pi
+            let a = Float(k) / Float(points.count) * 2 * Float.pi
             m.uvs.append(SIMD2(0.5 + 0.5 * cos(a), 0.5 + 0.5 * sin(a)))
         }
         for k in 1..<UInt32(points.count - 1) { m.indices += [base, base + k, base + k + 1] }
@@ -458,9 +458,12 @@ enum MeshGenerator {
     static func prismUnit(sides: Int) -> MeshData {
         let n = Swift.min(Swift.max(sides, 3), 24)
         var m = MeshData()
-        let ring = (0..<n).map { k -> SIMD2<Float> in
-            let a = (Float(k) + 0.5) / Float(n) * 2 * .pi + .pi / 2
-            return SIMD2(0.5 * cos(a), 0.5 * sin(a))
+        let step: Float = 2 * Float.pi / Float(n)
+        let start: Float = Float.pi / 2 + step / 2
+        var ring: [SIMD2<Float>] = []
+        for k in 0..<n {
+            let a: Float = start + Float(k) * step
+            ring.append(SIMD2<Float>(0.5 * cos(a), 0.5 * sin(a)))
         }
         addPolygon(&m, ring.map { SIMD3($0.x, 0.5, $0.y) }, normal: SIMD3(0, 1, 0))
         addPolygon(&m, ring.map { SIMD3($0.x, -0.5, $0.y) }, normal: SIMD3(0, -1, 0))
@@ -479,7 +482,7 @@ enum MeshGenerator {
         let steps = Swift.max(8, segments / 2)
         let base = UInt32(m.positions.count)
         for k in 0...steps {
-            let a = Float(k) / Float(steps) * .pi
+            let a = Float(k) / Float(steps) * Float.pi
             let n = SIMD3<Float>(0, sin(a), cos(a))
             for x in [Float(-0.5), Float(0.5)] {
                 m.positions.append(SIMD3(x, sin(a), cos(a)))
@@ -492,7 +495,7 @@ enum MeshGenerator {
             m.indices += [a, a + 1, a + 3, a, a + 3, a + 2]
         }
         let arc = (0...steps).map { k -> (Float, Float) in
-            let a = Float(k) / Float(steps) * .pi
+            let a = Float(k) / Float(steps) * Float.pi
             return (cos(a), sin(a))
         }
         for x in [Float(-0.5), Float(0.5)] {

@@ -449,7 +449,7 @@ extension DesignLibrary {
             k.add("nacelle", "capsule", at: v3(0, 1.22, 0.02), size: v3(0.07, 0.2, 0.07), rot: v3(90, 0, 0), color: "white", material: "paint")
             for i in 0..<3 {
                 let a = Float(i) * 120
-                let rad = a * .pi / 180
+                let rad = a * Float.pi / 180
                 k.add("blade", "roundedCube", at: v3(sin(rad) * 0.27, 1.22 + cos(rad) * 0.27, 0.13), size: v3(0.04, 0.54, 0.012), rot: v3(0, 0, -a),
                       color: k.color("blade", "white"), material: "paint", param: 0.6)
             }
@@ -462,7 +462,7 @@ extension DesignLibrary {
         k.add("hub", "cylinder", at: v3(0, 0.82, 0.17), size: v3(0.06, 0.06, 0.06), rot: v3(90, 0, 0), color: "darkgray", material: "metal")
         for i in 0..<blades {
             let a = 360 * Float(i) / Float(blades) + 45
-            let rad = a * .pi / 180
+            let rad = a * Float.pi / 180
             k.add("blade", "cube", at: v3(sin(rad) * 0.25, 0.82 + cos(rad) * 0.25, 0.205), size: v3(0.08, 0.46, 0.01), rot: v3(0, 0, -a),
                   color: k.color("blade", "beige"), material: "wood")
         }

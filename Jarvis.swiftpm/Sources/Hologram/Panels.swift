@@ -228,6 +228,9 @@ struct HelpPanel: View {
     private var sections: [(String, [String])] {
         ko ? [
             ("깨우기", ["\"Wake up Jarvis\" / \"자비스 일어나\"", "비상 웨이크 버튼(화면 오른쪽 아래)", "\"잘 자\" → 대기"]),
+            ("3D 설계", ["\"금색 바퀴 6개와 스포일러가 달린 빨간 스포츠카 만들어\"", "\"파란 지붕에 굴뚝 있는 이층집\" · \"탑 6개인 성\" · \"눈이 빨간 로봇\"",
+                        "만든 뒤 고치기: \"바퀴를 금색으로 바꿔\" · \"굴뚝 추가해\" · \"스포일러 빼줘\" · \"다리 두 개 더\"",
+                        "\"높이 2미터\" · \"나무 의자\" · \"유리 탁자\" · \"홀로그램 모드\" / \"실사 모드\""]),
             ("3D 공간", ["\"3D 공간 열어줘\"", "\"빨간 큐브 세 개 만들어\" · \"헬멧 만들어\"", "\"세 번 복제해\" · \"두 배로 키워\" · \"왼쪽으로 30cm 옮겨\"",
                         "마우스 왼쪽 드래그로 이동, 가리킨 채 스크롤로 확대/축소", "\"손 인식 켜\" → 엄지·검지로 집어 이동, 양손 간격으로 크기 조절",
                         "\"배경화면으로 저장해\" · \"모델 내보내기\""]),
@@ -238,6 +241,9 @@ struct HelpPanel: View {
                          "말하는 도중에 말씀하시면 즉시 멈추고 새 요청을 듣습니다"]),
         ] : [
             ("Wake", ["\"Wake up Jarvis\"", "Emergency wake button (bottom right)", "\"Go to sleep\" → standby"]),
+            ("3D design", ["\"Design a red sports car with six gold wheels and a spoiler\"", "\"A two-storey house with a blue roof and a chimney\" · \"A castle with 6 towers\"",
+                           "Refine it: \"Make the wheels gold\" · \"Add a chimney\" · \"Remove the spoiler\" · \"Two more legs\"",
+                           "\"2 metres tall\" · \"a wooden chair\" · \"a glass table\" · \"Hologram mode\" / \"Realistic mode\""]),
             ("3D space", ["\"Open the 3D space\"", "\"Make three red cubes\" · \"Build a helmet\"", "\"Clone it twice\" · \"Make it twice as big\" · \"Move it left 30 cm\"",
                           "Left-click drag to move; scroll while pointing to scale", "\"Hand tracking on\" → pinch to grab, spread both hands to scale",
                           "\"Set as wallpaper\" · \"Export the model\""]),

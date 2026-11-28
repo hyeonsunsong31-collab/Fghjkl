@@ -155,7 +155,7 @@ extension DesignLibrary {
         let phase: Float = towers == 4 ? 45 : 0
         var spots: [SIMD3<Float>] = []
         for i in 0..<towers {
-            let a = (phase + 360 * Float(i) / Float(towers)) * .pi / 180
+            let a = (phase + 360 * Float(i) / Float(towers)) * Float.pi / 180
             spots.append(v3(radius * sin(a), 0, radius * cos(a)))
         }
         for p in spots {
@@ -186,7 +186,7 @@ extension DesignLibrary {
                 let mid = (a + b) / 2
                 if mid.z > 0 && abs(mid.x) < 0.2 && k.keeps("gate") {
                     let out = simdNormalize(SIMD3(mid.x, 0, mid.z))
-                    let angle = atan2(d.x, d.z) * 180 / .pi
+                    let angle = atan2(d.x, d.z) * 180 / Float.pi
                     k.add("gate", "halfCylinder", at: v3(mid.x + out.x * (wallT / 2 + 0.004), 0.075, mid.z + out.z * (wallT / 2 + 0.004)),
                           size: v3(0.02, 0.15, 0.12), rot: v3(0, angle, 0), color: k.color("gate", "brown"), material: "wood")
                 }
@@ -298,7 +298,7 @@ extension DesignLibrary {
                 k.add("star", "prism", at: v3(0, 1.04, 0), size: v3(0.15, 0.04, 0.15), rot: v3(90, 0, 0), color: "gold", material: "emissive", param: 5)
                 let colors = ["red", "gold", "blue", "white"]
                 for i in 0..<10 {
-                    let a = Float(i) * 137.5 * .pi / 180
+                    let a = Float(i) * 137.5 * Float.pi / 180
                     let h = 0.32 + 0.05 * Float(i)
                     let r = 0.22 - 0.017 * Float(i)
                     k.add("ornament", "sphere", at: v3(r * sin(a), h, r * cos(a)), size: v3(0.035, 0.035, 0.035), color: colors[i % 4], material: "emissive")
@@ -312,7 +312,7 @@ extension DesignLibrary {
             var top = v3(0, 0, 0)
             for i in 0..<6 {
                 let lean = Float(i) * 2.2
-                let seg = v3(sin(lean * .pi / 180) * 0.11 * Float(i) * 0.5, 0.07 + 0.13 * Float(i), 0)
+                let seg = v3(sin(lean * Float.pi / 180) * 0.11 * Float(i) * 0.5, 0.07 + 0.13 * Float(i), 0)
                 k.add("trunk", "cylinder", at: seg, size: v3(0.065 - 0.003 * Float(i), 0.14, 0.065 - 0.003 * Float(i)), rot: v3(0, 0, -lean),
                       color: trunkColor, material: "wood")
                 top = seg + v3(0, 0.07, 0)
@@ -376,7 +376,7 @@ extension DesignLibrary {
                   color: k.color("center", sunflower ? "brown" : "yellow"), material: "fabric")
             for i in 0..<n {
                 let a = 360 * Float(i) / Float(n)
-                let rad = a * .pi / 180
+                let rad = a * Float.pi / 180
                 k.add("petal", "sphere", at: head + v3(cos(rad) * radius, sin(rad) * radius, -0.004), size: v3(length, length * 0.45, 0.012),
                       rot: v3(0, 0, a), color: petalColor, material: "fabric")
             }

@@ -157,7 +157,7 @@ final class SceneController {
         let freeH = max(h * 0.35, h - insets.top - insets.bottom)
         let cx = Float((insets.left + freeW / 2 - w / 2) / (w / 2))
         let cy = Float((insets.top + freeH / 2 - h / 2) / (h / 2))
-        let tanV = tan(camera.camera.fieldOfViewInDegrees * .pi / 360) // vertical field of view
+        let tanV = tan(camera.camera.fieldOfViewInDegrees * Float.pi / 360) // vertical field of view
         let tanH = tanV * Float(w / h)
         let fitAngle = min(atan(tanH * Float(freeW / w)), atan(tanV * Float(freeH / h)))
         distance = max(distance, min(6, radius / sin(fitAngle) * 1.1))
@@ -264,7 +264,7 @@ final class SceneController {
     }
 
     static func quaternion(_ degrees: SIMD3<Float>) -> simd_quatf {
-        let r = degrees * (.pi / 180)
+        let r = degrees * (Float.pi / 180)
         return simd_quatf(angle: r.y, axis: SIMD3(0, 1, 0)) * simd_quatf(angle: r.x, axis: SIMD3(1, 0, 0)) * simd_quatf(angle: r.z, axis: SIMD3(0, 0, 1))
     }
 
@@ -577,7 +577,7 @@ final class SceneController {
         guard let start = gestureScaleStart else { return }
         document.update(start.id) { obj in
             if let r = scaleRatio { obj.scale = simd_clamp(start.scale * r, SIMD3(repeating: 0.05), SIMD3(repeating: 12)) }
-            if let a = rotationRadians { obj.rotation.y = start.rotation.y - a * 180 / .pi }
+            if let a = rotationRadians { obj.rotation.y = start.rotation.y - a * 180 / Float.pi }
         }
         if let e = entities[start.id], let obj = document.objects.first(where: { $0.id == start.id }) { apply(obj, to: e) }
     }
