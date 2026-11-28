@@ -8,3 +8,6 @@ Package.resolved
 /tools/reference/.venv/
 /tools/reference/out/
 __pycache__/
+tools/exe-stub/stub.exe
+tools/exe-stub/stub.res
+studio-samples/

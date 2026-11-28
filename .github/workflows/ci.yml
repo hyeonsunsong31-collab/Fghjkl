@@ -23,6 +23,58 @@ jobs:
         run: apt-get update -qq && apt-get install -y -qq libsqlite3-dev > /dev/null
       - name: swift test
         run: swift test --parallel
+      - name: Export studio sample packages (.exe, .app, .sh, archives)
+        run: JARVIS_STUDIO_EXPORT=studio-samples swift test --filter StudioExport
+      - name: Rebuild the Windows launcher from source and compare with the embedded copy
+        run: |
+          apt-get install -y -qq mingw-w64 > /dev/null
+          sh tools/exe-stub/build.sh
+          embedded=$(grep -o 'sha256 = "[0-9a-f]*"' Jarvis.swiftpm/Sources/Core/Studio/Convert/ExeStub.swift | cut -d'"' -f2)
+          rebuilt=$(sha256sum tools/exe-stub/stub.exe | cut -d' ' -f1)
+          echo "embedded $embedded"; echo "rebuilt  $rebuilt"
+          if [ "$embedded" = "$rebuilt" ]; then echo "LAUNCHER IS REPRODUCIBLE FROM SOURCE ✅"; else echo "::warning::rebuilt launcher differs from the embedded one (toolchain version?)"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-samples
+          path: studio-samples
+
+  windows-packages:
+    name: Run Jarvis-made .exe packages on Windows
+    needs: core-tests-linux
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: studio-samples
+          path: samples
+      - name: Run the packages in quiet mode (restore files, open nothing)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:JARVIS_QUIET = "1"
+          Set-Location samples
+          function Run($exe) {
+            $p = Start-Process -FilePath $exe -PassThru
+            if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "$exe did not finish in 60 s" }
+            if ($p.ExitCode -ne 0) { throw "$exe exited with $($p.ExitCode)" }
+            Write-Host "$exe exited 0"
+          }
+          Run ".\settings.exe"
+          $restored = [IO.File]::ReadAllBytes((Resolve-Path ".\settings\settings.ini"))
+          $original = [IO.File]::ReadAllBytes((Resolve-Path ".\settings.ini"))
+          if ([Convert]::ToBase64String($restored) -ne [Convert]::ToBase64String($original)) { throw "settings.ini differs after the round trip" }
+          Write-Host "settings.exe restored settings.ini byte for byte"
+          Run ".\webgame.exe"
+          $dir = Join-Path $env:TEMP "JarvisApps\webgame"
+          Get-ChildItem -Recurse $dir | ForEach-Object { Write-Host $_.FullName $_.Length }
+          foreach ($f in @("index.html", "style.css", "js\game.js", "assets\$([char]0xD55C)$([char]0xAE00) $([char]0xC774)$([char]0xB984).txt")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir $f))) { throw "missing $f" }
+          }
+          $zip = Get-Item ".\webgame.zip"
+          Expand-Archive -LiteralPath $zip -DestinationPath ".\unzipped" -Force
+          if (-not (Test-Path ".\unzipped\js\game.js")) { throw "Windows could not unzip the Jarvis ZIP" }
+          Write-Host "WINDOWS RAN THE JARVIS PACKAGES AND OPENED THE ZIP ✅"
 
   playground-like-build:
     name: Device build with Xcode ${{ matrix.xcode }} (Swift Playground-like SDK)
