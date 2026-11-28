@@ -90,12 +90,13 @@ struct ChatHologram: View {
                 .submitLabel(.send)
                 .onSubmit(send)
                 .onChange(of: focused) { _, on in jarvis.setTyping(on) }
-                .onChange(of: draft) { _, _ in jarvis.noteTyping() }
+                .onChange(of: draft) { _, text in jarvis.noteTyping(hasText: !text.trimmingCharacters(in: .whitespaces).isEmpty) }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.35)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(border))
+        // Decoration only: it must never take the taps meant for the text field.
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(border).allowsHitTesting(false))
     }
 
     private var sendButton: some View {
@@ -268,7 +269,7 @@ struct InputStatusLine: View {
         case .listening:
             break
         }
-        if jarvis.typing {
+        if jarvis.composing {
             return Status(icon: "keyboard", text: ko ? "입력 중 — \"자비스\"로 부르는 말만 음성으로 받습니다" : "Typing — speech only counts when it starts with \"Jarvis\"", color: Holo.ice.opacity(0.6))
         }
         if !jarvis.isAwake {

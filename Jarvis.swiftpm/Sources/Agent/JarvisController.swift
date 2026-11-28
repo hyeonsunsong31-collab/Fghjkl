@@ -67,9 +67,11 @@ final class JarvisController {
     // MARK: Input status (shown under the chat input)
     /// A request (typed, spoken or tapped) is being carried out.
     var busy = false
-    /// The text field has focus: speech not addressed to Jarvis is ignored meanwhile (the
-    /// microphone hears the keyboard).
+    /// The text field has focus (the HUD calms its animations meanwhile).
     var typing = false
+    /// There is unsent text in the field: speech not addressed to Jarvis is set aside meanwhile
+    /// (the microphone hears the keyboard). An empty, focused field doesn't block speech.
+    var composing = false
     var voiceState: SpeechInputService.State = .off
     /// The last words the microphone delivered to Jarvis.
     var lastHeard = ""
@@ -457,7 +459,7 @@ final class JarvisController {
         c.jarvisSpeaking = speech.isSpeaking
         c.secondsSinceSpeechEnded = speech.secondsSinceSpeechEnded
         c.spokenRecently = speech.recentSpokenText(within: 8)
-        c.typing = typing || Date().timeIntervalSince(lastTypingActivity) < 3
+        c.typing = composing || Date().timeIntervalSince(lastTypingActivity) < 2.5
         c.pushToTalk = speechInput.pushToTalkActive
         c.secondsSinceLastUtterance = Date().timeIntervalSince(lastUtteranceTime)
         c.lastUtterance = lastUtteranceText
@@ -466,12 +468,14 @@ final class JarvisController {
 
     /// The text field gained or lost focus.
     func setTyping(_ on: Bool) {
-        typing = on
-        lastTypingActivity = Date()
+        if typing != on { typing = on }
     }
 
-    /// A key was typed.
-    func noteTyping() { lastTypingActivity = Date() }
+    /// The text in the field changed.
+    func noteTyping(hasText: Bool) {
+        lastTypingActivity = Date()
+        if composing != hasText { composing = hasText }
+    }
 
     /// Hold-to-talk: listen while the button is held, then carry out what was said.
     func pushToTalk(_ down: Bool) {

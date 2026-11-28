@@ -53,8 +53,9 @@ extension View {
                         .fill(LinearGradient(colors: [tint.opacity(0.12), .clear, tint.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing))
                 }
             )
-            .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(tint.opacity(0.45), lineWidth: 1))
-            .overlay(CornerBrackets(length: 14).stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round)).padding(-3))
+            // Decoration only: never in the way of taps on the controls inside the panel.
+            .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(tint.opacity(0.45), lineWidth: 1).allowsHitTesting(false))
+            .overlay(CornerBrackets(length: 14).stroke(tint, style: StrokeStyle(lineWidth: 2, lineCap: .round)).padding(-3).allowsHitTesting(false))
     }
 }
 
