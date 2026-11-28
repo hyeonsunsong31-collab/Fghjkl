@@ -18,6 +18,8 @@ enum VoiceGate {
         var pushToTalk = false
         var secondsSinceLastUtterance: Double = 999
         var lastUtterance = ""
+        /// The user cut Jarvis off a moment ago: what follows is the user's own speech.
+        var userInterrupted = false
     }
 
     enum Decision: Equatable {
@@ -75,6 +77,31 @@ enum VoiceGate {
         return Double(overlap) / Double(h.count)
     }
 
+    /// Words any two English sentences tend to share; they say nothing about an echo.
+    static let functionWords: Set<String> = ["a", "an", "the", "and", "or", "to", "of", "in", "on", "at", "it", "is", "be",
+                                             "i", "you", "your", "me", "my", "we", "for", "are", "with", "this", "that",
+                                             "have", "has", "was", "will", "can", "all", "now", "sir", "please", "so", "do"]
+
+    /// Like `echoSimilarity`, counting only content words ("cube", "weather", "큐브").
+    static func contentSimilarity(_ heard: String, spoken: String) -> Double {
+        func content(_ t: [String]) -> [String] {
+            let kept = t.filter { !functionWords.contains($0) }
+            return kept.isEmpty ? t : kept
+        }
+        let h = content(tokens(heard))
+        let s = Set(content(tokens(spoken)))
+        guard !h.isEmpty, !s.isEmpty else { return 0 }
+        let overlap = h.filter { s.contains($0) }.count
+        return Double(overlap) / Double(h.count)
+    }
+
+    /// While Jarvis talks: is this plainly the user's own sentence rather than Jarvis heard back?
+    static func unlikeSpeech(_ text: String, spoken: String) -> Bool {
+        guard tokens(text).count >= 2 else { return false }
+        guard !spoken.isEmpty else { return true }
+        return echoSimilarity(text, spoken: spoken) < 0.4 && contentSimilarity(text, spoken: spoken) < 0.4
+    }
+
     /// Should this finished utterance become a command?
     static func utterance(_ text: String, confidence: Double, context c: Context) -> Decision {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -89,9 +116,15 @@ enum VoiceGate {
             if similarity >= 0.6 && (words.count >= 2 || !named) { return .drop("echo") }
         }
         if c.pushToTalk { return .accept }
-        // Half-duplex while Jarvis talks: only an interruption gets through.
-        if c.jarvisSpeaking && !containsBargeInWord(trimmed) { return .drop("while speaking") }
-        if c.secondsSinceSpeechEnded < 0.7 && !named && !isStopCommand(trimmed) { return .drop("speech tail") }
+        // While Jarvis talks the microphone mostly hears Jarvis itself. An interruption, speech
+        // addressed to Jarvis, or a sentence plainly unlike what Jarvis is saying gets through.
+        if c.jarvisSpeaking && !containsBargeInWord(trimmed) && !unlikeSpeech(trimmed, spoken: c.spokenRecently) {
+            return .drop("while speaking")
+        }
+        if c.secondsSinceSpeechEnded < 0.7 && !c.userInterrupted && !named && !isStopCommand(trimmed)
+            && !unlikeSpeech(trimmed, spoken: c.spokenRecently) {
+            return .drop("speech tail")
+        }
         // The microphone hears the keyboard: while typing, only speech addressed to Jarvis counts.
         if c.typing && !named && !isStopCommand(trimmed) { return .drop("typing") }
         if c.secondsSinceLastUtterance < 2.5 && tokens(c.lastUtterance) == words { return .drop("duplicate") }

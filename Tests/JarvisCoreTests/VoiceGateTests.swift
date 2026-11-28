@@ -21,14 +21,37 @@ final class VoiceGateTests: XCTestCase {
         XCTAssertEqual(VoiceGate.utterance("Jarvis at your service sir", confidence: 0.9, context: c), .drop("echo"))
     }
 
-    func testHalfDuplexWhileSpeaking() {
+    func testWhileSpeaking() {
         var c = VoiceGate.Context()
         c.jarvisSpeaking = true
         c.spokenRecently = "The weather today is sunny with a light breeze."
-        XCTAssertEqual(VoiceGate.utterance("make a cube", confidence: 0.9, context: c), .drop("while speaking"))
+        // A sentence unlike Jarvis' own is the user talking over it.
+        XCTAssertEqual(VoiceGate.utterance("make a cube", confidence: 0.9, context: c), .accept)
+        XCTAssertEqual(VoiceGate.utterance("빨간 큐브 만들어줘", confidence: 0.9, context: c), .accept)
+        // Single words and sentences like Jarvis' own are its voice coming back.
+        XCTAssertEqual(VoiceGate.utterance("cube", confidence: 0.9, context: c), .drop("while speaking"))
+        XCTAssertEqual(VoiceGate.utterance("sunny breeze today", confidence: 0.9, context: c), .drop("echo"))
+        c.spokenRecently = "I have created three red cubes, sir."
+        XCTAssertEqual(VoiceGate.utterance("I have greeted tree rare cubes", confidence: 0.9, context: c), .drop("while speaking"))
+        // Interruptions always get through.
         XCTAssertEqual(VoiceGate.utterance("stop", confidence: 0.9, context: c), .accept)
         XCTAssertEqual(VoiceGate.utterance("Jarvis make a cube", confidence: 0.9, context: c), .accept)
         XCTAssertEqual(VoiceGate.utterance("그만", confidence: 0.9, context: c), .accept)
+    }
+
+    func testRightAfterSpeech() {
+        var c = VoiceGate.Context()
+        c.secondsSinceSpeechEnded = 0.3
+        c.spokenRecently = "Here are the top results for your search, sir."
+        XCTAssertEqual(VoiceGate.utterance("search sir", confidence: 0.9, context: c), .drop("echo"))
+        XCTAssertEqual(VoiceGate.utterance("results", confidence: 0.9, context: c), .drop("echo"))
+        XCTAssertEqual(VoiceGate.utterance("okay", confidence: 0.9, context: c), .drop("speech tail"))
+        XCTAssertEqual(VoiceGate.utterance("open the camera", confidence: 0.9, context: c), .accept)
+        // After the user cut Jarvis off, even a short reply is the user's.
+        c.userInterrupted = true
+        XCTAssertEqual(VoiceGate.utterance("okay", confidence: 0.9, context: c), .accept)
+        XCTAssertTrue(VoiceGate.unlikeSpeech("make a blue sphere", spoken: "Done, sir. I have created a red cube."))
+        XCTAssertFalse(VoiceGate.unlikeSpeech("created a red cube", spoken: "Done, sir. I have created a red cube."))
     }
 
     func testTypingAndNoise() {

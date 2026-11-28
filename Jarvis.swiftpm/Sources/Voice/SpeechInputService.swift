@@ -185,6 +185,7 @@ final class SpeechInputService {
     private(set) var oneLanguageAtATime = false
     private var conflictStrikes: [Date] = []
     private var engineRecoveries: [Date] = []
+    private var recoveringAudio = false
     private let router = AudioRouter()
     private let wakeMatcher = WakeWordMatcher()
     private var finalizing = false
@@ -246,7 +247,9 @@ final class SpeechInputService {
         while true {
             CrashLog.breadcrumb("audio: starting microphone")
             do {
-                try hub.start(captureMicrophone: true)
+                // Runs on the audio queue: voice processing takes seconds to start and must never
+                // block the main thread (typing, taps and speech callbacks all live there).
+                try await hub.start(captureMicrophone: true)
                 break
             } catch {
                 attempt += 1
@@ -262,6 +265,11 @@ final class SpeechInputService {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 guard wantsRunning else { return }
             }
+        }
+        guard wantsRunning else {
+            hub.setMicrophoneCapture(false)
+            state = .off
+            return
         }
         isRunning = true
         state = .listening
@@ -732,19 +740,28 @@ final class SpeechInputService {
     }
 
     /// Restart the audio input (rate-limited so a broken route cannot cause a restart storm).
+    /// The engine work happens on the audio queue; the main thread only waits for the result.
     private func recoverAudio(reason: String) {
+        guard !recoveringAudio else { return }
         let now = Date()
         engineRecoveries = engineRecoveries.filter { now.timeIntervalSince($0) < 60 }
         guard engineRecoveries.count < 5 else { return }
         engineRecoveries.append(now)
+        recoveringAudio = true
         Log.voice.error("Restarting audio input: \(reason, privacy: .public)")
-        do {
-            try AudioEngineHub.shared.restartCapture()
-            router.resetHealth()
-            restartAll()
-        } catch {
-            let message = error.localizedDescription
-            Log.voice.error("Audio input restart failed: \(message, privacy: .public)")
+        Task { [weak self] in
+            do {
+                try await AudioEngineHub.shared.restartCapture()
+                guard let self else { return }
+                self.recoveringAudio = false
+                guard self.isRunning else { return }
+                self.router.resetHealth()
+                self.restartAll()
+            } catch {
+                self?.recoveringAudio = false
+                let message = error.localizedDescription
+                Log.voice.error("Audio input restart failed: \(message, privacy: .public)")
+            }
         }
     }
 }

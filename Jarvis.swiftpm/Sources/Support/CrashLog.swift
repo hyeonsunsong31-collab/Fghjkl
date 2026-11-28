@@ -31,6 +31,9 @@ enum CrashLog {
         crumb[bytes.count] = 0
     }
 
+    /// The last breadcrumb (for diagnostics such as the main-thread stall monitor).
+    static var lastBreadcrumb: String { String(cString: crumb) }
+
     /// The previous session's crash report (removed once read); nil when it ended normally.
     static func takeLastReport() -> String? {
         let url = fileURL

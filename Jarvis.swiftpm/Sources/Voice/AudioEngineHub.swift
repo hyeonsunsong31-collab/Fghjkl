@@ -6,10 +6,16 @@ import os
 /// keep listening while it speaks — the basis of barge-in — and all speech is
 /// played through the same engine so the canceller knows what to remove.
 ///
+/// Threading: every engine and audio-session operation runs on one private
+/// **serial audio queue**, never on the main thread. Starting voice-processing
+/// I/O takes seconds; on the main thread it froze the screen, the keyboard and
+/// speech callbacks each time the engine (re)started (first reply, microphone
+/// watchdog restarts, route changes). Other threads read lock-protected
+/// snapshots (`isRunning`, `isCapturing`, `voiceProcessingEnabled`, `isPlaying`).
+///
 /// Crash-safety rules (AVAudioEngine raises Objective-C exceptions that Swift
 /// cannot catch):
-/// - every engine mutation happens on the **main thread**; calls from other
-///   threads (e.g. the speech synthesizer's buffer callback) are hopped there;
+/// - every engine mutation happens on the audio queue, in order;
 /// - a tap is always removed before one is installed (two taps on one bus is fatal);
 /// - after a configuration change / interruption the engine is rebuilt once,
 ///   debounced, instead of from inside the notification;
@@ -34,17 +40,29 @@ final class AudioEngineHub: @unchecked Sendable {
     private let player = AVAudioPlayerNode()
     /// Kokoro's native output format; system-voice audio is converted to it.
     let playbackFormat = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)!
-    private(set) var isRunning = false
-    private(set) var voiceProcessingEnabled = false
+
+    private let queue = DispatchQueue(label: "jarvis.audio-engine", qos: .userInitiated)
+    private let queueKey = DispatchSpecificKey<Bool>()
+
+    // Engine state — audio queue only.
+    private var running = false
+    private var voiceProcessing = false
     private var wantsCapture = false
     private var tapInstalled = false
     private var playerConnected = false
     private var restartScheduled = false
+    private var recentRebuilds: [Date] = []
+    private var deferredRebuild = false
+    /// When the audio queued so far should have finished playing.
+    private var expectedDrain = Date.distantPast
+
+    // Snapshots for other threads — guarded by `lock`.
     private let lock = NSLock()
+    private var snapRunning = false
+    private var snapCapturing = false
+    private var snapVoiceProcessing = false
     private var scheduledBuffers = 0
     private var generation = 0
-    /// When the audio queued so far should have finished playing (main thread).
-    private var expectedDrain = Date.distantPast
 
     /// Microphone buffers (called on the realtime audio thread, never on the main actor).
     var onInputBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
@@ -52,24 +70,63 @@ final class AudioEngineHub: @unchecked Sendable {
     var onPlaybackDrained: (() -> Void)?
 
     private init() {
+        queue.setSpecific(key: queueKey, value: true)
         let center = NotificationCenter.default
-        center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
-            self?.handleInterruption(note)
+        // Notifications arrive on arbitrary threads; their work hops to the audio queue.
+        center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { [weak self] note in
+            guard let hub = self else { return }
+            let raw: UInt? = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            hub.onQueue { hub.handleInterruption(raw) }
         }
-        center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.scheduleRestart()
+        center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: nil) { [weak self] _ in
+            guard let hub = self else { return }
+            hub.onQueue { hub.scheduleRestart() }
         }
-        center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            self?.scheduleRestart()
+        center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
+            guard let hub = self else { return }
+            hub.onQueue { hub.scheduleRestart() }
         }
     }
 
-    /// Run `work` on the main thread (immediately when already there).
-    private func onMain(_ work: @escaping () -> Void) {
-        if Thread.isMainThread { work() } else { DispatchQueue.main.async { work() } }
+    /// Run `work` on the audio queue (immediately when already there).
+    private func onQueue(_ work: @escaping () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) == true { work() } else { queue.async(execute: work) }
     }
 
-    func configureSession() throws {
+    /// Publish the engine state for other threads (audio queue).
+    private func publish() {
+        let isOn: Bool = running && engine.isRunning
+        let capturing: Bool = isOn && tapInstalled
+        let vp: Bool = voiceProcessing
+        lock.lock()
+        snapRunning = isOn
+        snapCapturing = capturing
+        snapVoiceProcessing = vp
+        lock.unlock()
+    }
+
+    var isRunning: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return snapRunning
+    }
+
+    /// Is the microphone tap live on a running engine?
+    var isCapturing: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return snapCapturing
+    }
+
+    var voiceProcessingEnabled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return snapVoiceProcessing
+    }
+
+    var isPlaying: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return scheduledBuffers > 0
+    }
+
+    private func configureSession() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default,
                                 options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
@@ -77,56 +134,69 @@ final class AudioEngineHub: @unchecked Sendable {
         try session.setActive(true, options: [])
     }
 
-    // MARK: Lifecycle (main thread)
+    // MARK: Lifecycle (audio queue)
 
-    /// Start the engine (if needed) and capture the microphone or not.
-    func start(captureMicrophone: Bool) throws {
-        guard Thread.isMainThread else {
-            onMain { try? self.start(captureMicrophone: captureMicrophone) }
-            return
+    /// Start the engine (if needed) and capture the microphone or not. Waits on the audio
+    /// queue — the main thread stays free while voice processing starts up.
+    func start(captureMicrophone: Bool) async throws {
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            onQueue {
+                self.wantsCapture = captureMicrophone
+                do {
+                    try self.ensureRunning()
+                    self.applyCapture()
+                    self.publish()
+                    c.resume()
+                } catch {
+                    self.publish()
+                    c.resume(throwing: error)
+                }
+            }
         }
-        wantsCapture = captureMicrophone
-        try ensureRunning()
-        applyCapture()
     }
 
     /// Turn microphone capture on or off without touching playback.
     func setMicrophoneCapture(_ enabled: Bool) {
-        onMain {
+        onQueue {
             self.wantsCapture = enabled
-            if enabled && !self.isRunning { try? self.ensureRunning() }
+            if enabled && !(self.running && self.engine.isRunning) { try? self.ensureRunning() }
             self.applyCapture()
+            self.publish()
         }
     }
 
-    /// Is the microphone tap live on a running engine? (main thread)
-    var isCapturing: Bool { isRunning && engine.isRunning && tapInstalled }
-
-    /// Rebuild the engine now and resume capture (main thread; used by the speech watchdog).
-    func restartCapture() throws {
-        guard Thread.isMainThread else {
-            onMain { try? self.restartCapture() }
-            return
+    /// Rebuild the engine and resume capture (used by the speech watchdog).
+    func restartCapture() async throws {
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            onQueue {
+                self.removeTap()
+                self.player.stop()
+                self.engine.stop()
+                self.running = false
+                self.wantsCapture = true
+                do {
+                    try self.ensureRunning()
+                    self.applyCapture()
+                    self.publish()
+                    c.resume()
+                } catch {
+                    self.publish()
+                    c.resume(throwing: error)
+                }
+            }
         }
-        removeTap()
-        player.stop()
-        engine.stop()
-        isRunning = false
-        wantsCapture = true
-        try ensureRunning()
-        applyCapture()
     }
 
-    /// Turn echo cancellation on or off (the engine is rebuilt; main thread).
+    /// Turn echo cancellation on or off (the engine is rebuilt).
     func setVoiceProcessing(_ enabled: Bool) {
-        onMain {
-            Self.voiceProcessingPreferred = enabled
-            guard enabled != self.voiceProcessingEnabled else { return }
+        Self.voiceProcessingPreferred = enabled
+        onQueue {
+            guard enabled != self.voiceProcessing else { return }
             let capture = self.wantsCapture
             self.removeTap()
             self.player.stop()
             self.engine.stop()
-            self.isRunning = false
+            self.running = false
             self.wantsCapture = capture
             do {
                 try self.ensureRunning()
@@ -134,32 +204,34 @@ final class AudioEngineHub: @unchecked Sendable {
             } catch {
                 Log.voice.error("Audio engine restart failed: \(error.localizedDescription, privacy: .public)")
             }
+            self.publish()
         }
     }
 
     func stop() {
-        onMain {
+        onQueue {
             self.wantsCapture = false
             self.removeTap()
             self.player.stop()
             self.engine.stop()
-            self.isRunning = false
+            self.running = false
+            self.publish()
         }
     }
 
-    /// Bring the engine up with voice processing and the speech player connected.
+    /// Bring the engine up with voice processing and the speech player connected (audio queue).
     private func ensureRunning() throws {
-        if isRunning && engine.isRunning { return }
-        isRunning = false
+        if running && engine.isRunning { return }
+        running = false
         CrashLog.breadcrumb("audio: session")
         try configureSession()
 
         let wantVoiceProcessing = Self.voiceProcessingPreferred
-        if wantVoiceProcessing != voiceProcessingEnabled {
+        if wantVoiceProcessing != voiceProcessing {
             CrashLog.breadcrumb("audio: voice processing")
             do {
                 try engine.inputNode.setVoiceProcessingEnabled(wantVoiceProcessing)
-                voiceProcessingEnabled = wantVoiceProcessing
+                voiceProcessing = wantVoiceProcessing
                 if wantVoiceProcessing {
                     // Keep other audio (music) at full volume while we listen.
                     engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
@@ -181,17 +253,19 @@ final class AudioEngineHub: @unchecked Sendable {
         removeTap()
         if wantsCapture { installTap() }
         CrashLog.breadcrumb("audio: engine start")
+        let began = Date()
         engine.prepare()
         try engine.start()
-        isRunning = engine.isRunning
-        guard isRunning else { throw HubError.notRunning }
+        running = engine.isRunning
+        guard running else { throw HubError.notRunning }
         player.play()
-        let mode: String = voiceProcessingEnabled ? "on" : "off"
-        Log.voice.info("Audio engine running (echo cancellation \(mode, privacy: .public), capture \(self.tapInstalled, privacy: .public))")
+        let mode: String = voiceProcessing ? "on" : "off"
+        let secs = String(format: "%.2f", Date().timeIntervalSince(began))
+        Log.voice.info("Audio engine running (echo cancellation \(mode, privacy: .public), capture \(self.tapInstalled, privacy: .public)) after \(secs, privacy: .public)s, off the main thread")
     }
 
     private func applyCapture() {
-        guard isRunning else { return }
+        guard running else { return }
         if wantsCapture {
             if !tapInstalled { installTap() }
         } else {
@@ -219,24 +293,19 @@ final class AudioEngineHub: @unchecked Sendable {
         tapInstalled = false
     }
 
-    /// Rebuild the engine once, shortly after a configuration change or media reset.
+    /// Rebuild the engine once, shortly after a configuration change or media reset (audio queue).
     private func scheduleRestart() {
-        onMain {
-            guard !self.restartScheduled else { return }
-            self.restartScheduled = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                self.restartScheduled = false
-                self.rebuild()
-            }
+        guard !restartScheduled else { return }
+        restartScheduled = true
+        queue.asyncAfter(deadline: .now() + 0.35) {
+            self.restartScheduled = false
+            self.rebuild()
         }
     }
 
-    private var recentRebuilds: [Date] = []
-    private var deferredRebuild = false
-
     private func rebuild() {
         // Only an engine that the system actually stopped needs rebuilding; never loop.
-        if engine.isRunning && isRunning { return }
+        if engine.isRunning && running { return }
         let now = Date()
         recentRebuilds = recentRebuilds.filter { now.timeIntervalSince($0) < 10 }
         guard recentRebuilds.count < 4 else {
@@ -244,7 +313,7 @@ final class AudioEngineHub: @unchecked Sendable {
             Log.voice.error("Audio engine keeps reconfiguring; retrying in 5 s")
             if !deferredRebuild {
                 deferredRebuild = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                queue.asyncAfter(deadline: .now() + 5) {
                     self.deferredRebuild = false
                     self.rebuild()
                 }
@@ -256,13 +325,14 @@ final class AudioEngineHub: @unchecked Sendable {
         removeTap()
         player.stop()
         engine.stop()
-        isRunning = false
+        running = false
         wantsCapture = capture
         do {
             try ensureRunning()
         } catch {
             Log.voice.error("Audio engine restart failed: \(error.localizedDescription)")
         }
+        publish()
     }
 
     // MARK: Playback
@@ -271,14 +341,15 @@ final class AudioEngineHub: @unchecked Sendable {
     func play(samples: [Float], completion: (() -> Void)? = nil) {
         guard !samples.isEmpty, let buffer = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: AVAudioFrameCount(samples.count)),
               let channel = buffer.floatChannelData else {
-            if let completion { onMain(completion) }
+            if let completion { DispatchQueue.main.async(execute: completion) }
             return
         }
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { src in
             if let base = src.baseAddress { channel[0].update(from: base, count: samples.count) }
         }
-        onMain { self.schedule(buffer, completion: completion) }
+        let gen = reserve()
+        onQueue { self.schedule(buffer, generation: gen, completion: completion) }
     }
 
     /// Queue any PCM buffer, converted to the playback format when needed (any thread).
@@ -290,36 +361,55 @@ final class AudioEngineHub: @unchecked Sendable {
             ready = Self.convert(buffer, to: playbackFormat)
         }
         guard let ready, ready.frameLength > 0 else {
-            if let completion { onMain(completion) }
+            if let completion { DispatchQueue.main.async(execute: completion) }
             return
         }
-        onMain { self.schedule(ready, completion: completion) }
+        let gen = reserve()
+        onQueue { self.schedule(ready, generation: gen, completion: completion) }
     }
 
-    /// Main thread only.
-    private func schedule(_ buffer: AVAudioPCMBuffer, completion: (() -> Void)?) {
-        if !isRunning || !engine.isRunning {
+    /// Count a buffer as playing from the moment it is handed over, so `isPlaying` is right even
+    /// while the audio queue is still starting the engine.
+    private func reserve() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        scheduledBuffers += 1
+        return generation
+    }
+
+    /// A buffer finished (or never reached the player). Returns the buffers still playing, or
+    /// nil when `stopPlayback()` already dropped it.
+    private func release(_ gen: Int) -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        guard gen == generation else { return nil }
+        if scheduledBuffers > 0 { scheduledBuffers -= 1 }
+        return scheduledBuffers
+    }
+
+    private func finished(remaining: Int?, completion: (() -> Void)?) {
+        guard let remaining else { return }
+        DispatchQueue.main.async {
+            completion?()
+            if remaining == 0 { self.onPlaybackDrained?() }
+        }
+    }
+
+    /// Audio queue only.
+    private func schedule(_ buffer: AVAudioPCMBuffer, generation gen: Int, completion: (() -> Void)?) {
+        lock.lock(); let dropped = gen != generation; lock.unlock()
+        guard !dropped else { return } // stopPlayback() while it waited for the queue
+        if !running || !engine.isRunning {
             do { try ensureRunning() } catch { Log.voice.error("Playback engine failed: \(error.localizedDescription)") }
+            publish()
         }
         // AVAudioPlayerNode raises an exception if used while the engine is stopped
         // (e.g. during an audio interruption): drop the audio instead of crashing.
         guard engine.isRunning, playerConnected, buffer.format.channelCount == playbackFormat.channelCount else {
-            completion?()
+            finished(remaining: release(gen), completion: completion)
             return
         }
-        lock.lock(); scheduledBuffers += 1; let gen = generation; lock.unlock()
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             guard let self else { return }
-            self.lock.lock()
-            let current = gen == self.generation
-            if current && self.scheduledBuffers > 0 { self.scheduledBuffers -= 1 }
-            let remaining = self.scheduledBuffers
-            self.lock.unlock()
-            guard current else { return } // dropped by stopPlayback()
-            DispatchQueue.main.async {
-                completion?()
-                if remaining == 0 { self.onPlaybackDrained?() }
-            }
+            self.finished(remaining: self.release(gen), completion: completion)
         }
         if !player.isPlaying { player.play() }
         // Safety net: if playback stalls (callbacks never arrive), report "drained" anyway
@@ -327,7 +417,7 @@ final class AudioEngineHub: @unchecked Sendable {
         let duration: Double = Double(buffer.frameLength) / max(1, buffer.format.sampleRate)
         expectedDrain = max(Date(), expectedDrain).addingTimeInterval(duration)
         let deadline = expectedDrain.addingTimeInterval(2)
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.1, deadline.timeIntervalSinceNow)) { [weak self] in
+        queue.asyncAfter(deadline: .now() + max(0.1, deadline.timeIntervalSinceNow)) { [weak self] in
             self?.forceDrainIfStalled(generation: gen, deadline: deadline)
         }
     }
@@ -341,23 +431,18 @@ final class AudioEngineHub: @unchecked Sendable {
         lock.unlock()
         if stalled {
             Log.voice.error("Playback callbacks stalled; treating speech as finished")
-            onPlaybackDrained?()
+            DispatchQueue.main.async { self.onPlaybackDrained?() }
         }
     }
 
     /// Stop speech immediately (barge-in) and drop everything queued.
     func stopPlayback() {
         lock.lock(); generation += 1; scheduledBuffers = 0; lock.unlock()
-        onMain {
+        onQueue {
             guard self.player.engine != nil else { return }
             self.player.stop()
             if self.engine.isRunning && self.playerConnected { self.player.play() }
         }
-    }
-
-    var isPlaying: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return scheduledBuffers > 0
     }
 
     static func convert(_ buffer: AVAudioPCMBuffer, to format: AVAudioFormat) -> AVAudioPCMBuffer? {
@@ -380,14 +465,14 @@ final class AudioEngineHub: @unchecked Sendable {
         return (status == .error || error != nil) ? nil : out
     }
 
-    // MARK: Interruptions (main thread)
+    // MARK: Interruptions (audio queue)
 
-    private func handleInterruption(_ note: Notification) {
-        guard let info = note.userInfo, let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+    private func handleInterruption(_ raw: UInt?) {
+        guard let raw, let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
         switch type {
         case .began:
-            isRunning = false
+            running = false
+            publish()
         case .ended:
             scheduleRestart()
         @unknown default:

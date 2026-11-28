@@ -77,6 +77,7 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
 
     override init() {
         super.init()
+        VoiceCache.shared.refresh()
         synthesizer.delegate = self
         AudioEngineHub.shared.onPlaybackDrained = { [weak self] in
             guard let self else { return }
@@ -263,8 +264,16 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
 
     // MARK: Voices
 
-    /// Best installed male voice for the language (premium > enhanced > default).
+    /// Best installed male voice for the language, from `VoiceCache` (never scans on the main
+    /// thread once the launch-time scan has finished).
     static func bestVoice(for language: DetectedLanguage) -> AVSpeechSynthesisVoice? {
+        VoiceCache.shared.voice(for: language)
+    }
+
+    /// Scan the installed voices and pick the best male one (premium > enhanced > default).
+    /// Slow — `speechVoices()` reads every installed voice asset — so `VoiceCache` runs it in the
+    /// background.
+    nonisolated static func chooseVoice(for language: DetectedLanguage) -> AVSpeechSynthesisVoice? {
         let code = language == .korean ? "ko-KR" : "en-GB"
         let voices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == code }
         func score(_ v: AVSpeechSynthesisVoice) -> Int {
@@ -318,5 +327,55 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
         let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
         if !tail.isEmpty { out.append(tail) }
         return out
+    }
+}
+
+
+/// The chosen system voices. `AVSpeechSynthesisVoice.speechVoices()` scans every installed voice
+/// asset — up to seconds on a device — and used to run on the main thread for every sentence
+/// Jarvis spoke (and on every redraw of Settings), freezing typing and taps while it talked.
+/// Now it runs in the background at launch and every few minutes after (new voices downloaded).
+final class VoiceCache: @unchecked Sendable {
+    static let shared = VoiceCache()
+
+    private let lock = NSLock()
+    private var voices: [DetectedLanguage: AVSpeechSynthesisVoice] = [:]
+    private var updated = Date.distantPast
+    private var refreshing = false
+
+    /// The cached voice; scans synchronously only if asked before the first scan finished.
+    func voice(for language: DetectedLanguage) -> AVSpeechSynthesisVoice? {
+        lock.lock()
+        let cached = voices[language]
+        let stale: Bool = Date().timeIntervalSince(updated) > 300
+        lock.unlock()
+        if stale { refresh() }
+        if let cached { return cached }
+        let chosen = SpeechOutputService.chooseVoice(for: language)
+        lock.lock()
+        if let chosen, voices[language] == nil { voices[language] = chosen }
+        lock.unlock()
+        return chosen
+    }
+
+    /// Rescan the installed voices off the main thread.
+    func refresh() {
+        lock.lock()
+        guard !refreshing else { lock.unlock(); return }
+        refreshing = true
+        lock.unlock()
+        DispatchQueue.global(qos: .utility).async {
+            let began = Date()
+            let english = SpeechOutputService.chooseVoice(for: .english)
+            let korean = SpeechOutputService.chooseVoice(for: .korean)
+            self.lock.lock()
+            if let english { self.voices[.english] = english }
+            if let korean { self.voices[.korean] = korean }
+            self.updated = Date()
+            self.refreshing = false
+            self.lock.unlock()
+            let secs = String(format: "%.2f", Date().timeIntervalSince(began))
+            Log.voice.info("System voices scanned in \(secs, privacy: .public)s (off the main thread)")
+        }
     }
 }

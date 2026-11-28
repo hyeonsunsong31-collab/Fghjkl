@@ -199,8 +199,12 @@ enum AppleFMDesigner {
         do {
             let session = LanguageModelSession(instructions: prompt.instructions)
             let options = GenerationOptions(temperature: 0.35, maximumResponseTokens: 2400)
-            let response = try await session.respond(to: prompt.prompt, generating: GeneratedModelSpec.self, options: options)
-            return convert(response.content)
+            // Never let a stuck model hold the design turn: the parametric library takes over.
+            let spec: ModelSpec = try await withDeadline(seconds: 60) {
+                let response = try await session.respond(to: prompt.prompt, generating: GeneratedModelSpec.self, options: options)
+                return AppleFMDesigner.convert(response.content)
+            }
+            return spec
         } catch {
             let message = error.localizedDescription
             Log.agent.error("Design generation failed: \(message, privacy: .public)")

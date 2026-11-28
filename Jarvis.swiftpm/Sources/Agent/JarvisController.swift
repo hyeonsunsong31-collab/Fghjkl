@@ -82,6 +82,7 @@ final class JarvisController {
     @ObservationIgnored private var lastUtteranceText = ""
     @ObservationIgnored private var lastUtteranceTime = Date.distantPast
     @ObservationIgnored private var queuedVoice: [(text: String, language: DetectedLanguage?, confidence: Double?)] = []
+    @ObservationIgnored private var turnStarted = Date.distantPast
     @ObservationIgnored private var turnToken = UUID()
     @ObservationIgnored private var currentTurnModality: InputModality?
     @ObservationIgnored private var lastLevelUpdate = Date.distantPast
@@ -395,8 +396,11 @@ final class JarvisController {
         pendingLink = nil
         if !isAwake && modality != .voice { wake(source: modality, speak: false) }
         // Speech never cancels a typed or tapped request that is still being carried out (the
-        // microphone hears keyboard clicks and Jarvis itself); it waits its turn. "Stop" interrupts.
-        if modality == .voice, currentTask != nil, let running = currentTurnModality, running != .voice, !VoiceGate.isStopCommand(clean) {
+        // microphone hears keyboard clicks and Jarvis itself); it waits its turn. "Stop" interrupts,
+        // and so does any speech once the request has run for 20 s (it must never trap the voice).
+        let turnAge: Double = Date().timeIntervalSince(turnStarted)
+        if modality == .voice, currentTask != nil, let running = currentTurnModality, running != .voice,
+           !VoiceGate.isStopCommand(clean), turnAge < 20 {
             queuedVoice.append((clean, language, confidence))
             Log.voice.info("Voice input queued behind a typed request")
             return
@@ -412,6 +416,7 @@ final class JarvisController {
         appendMessage(.user, clean, language: shown)
         let token = UUID()
         turnToken = token
+        turnStarted = Date()
         currentTurnModality = modality
         busy = true
         let started = Date()
@@ -463,6 +468,7 @@ final class JarvisController {
         c.pushToTalk = speechInput.pushToTalkActive
         c.secondsSinceLastUtterance = Date().timeIntervalSince(lastUtteranceTime)
         c.lastUtterance = lastUtteranceText
+        c.userInterrupted = Date().timeIntervalSince(lastSpeechInterruption) < 4
         return c
     }
 
@@ -701,7 +707,8 @@ final class JarvisController {
         if late > 0.6 {
             let secs = String(format: "%.2f", late)
             let p: String = phase.rawValue
-            Log.agent.error("Main thread stalled for \(secs, privacy: .public)s (phase \(p, privacy: .public))")
+            let last: String = CrashLog.lastBreadcrumb
+            Log.agent.error("Main thread stalled for \(secs, privacy: .public)s (phase \(p, privacy: .public), last step: \(last, privacy: .public))")
             CrashLog.breadcrumb("main thread stalled \(secs)s")
         }
     }
@@ -767,10 +774,33 @@ final class JarvisController {
             guard let self else { return }
             if !self.isAwake { self.wake(source: .button, speak: false) }
             self.speechInput.mode = .conversation
+            // Like a person, let Jarvis finish its sentence first (at most 15 s).
+            var waited = 0
+            while (self.speech.isSpeaking || self.busy) && waited < 150 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            try? await Task.sleep(nanoseconds: 800_000_000)
             self.speechInput.simulateHeard(text, language: .english)
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             let heard: Bool = self.messages.contains { $0.role == .user && $0.text == text }
             Log.agent.info("Voice test: command delivered=\(heard, privacy: .public)")
+            // Talking over Jarvis with a different sentence is the user, not an echo.
+            self.speech.stop()
+            let talk = "The forecast for tomorrow is cloudy with light rain, sir."
+            self.speech.speak(talk, language: .english)
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            let over = "make a green cone"
+            let speakingThen: Bool = self.speech.isSpeaking
+            self.speechInput.simulateHeard(over, language: .english)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            let overHeard: Bool = self.messages.contains { $0.role == .user && $0.text == over }
+            Log.agent.info("Voice test: command while speaking delivered=\(overHeard, privacy: .public) (speaking=\(speakingThen, privacy: .public))")
+            waited = 0
+            while (self.speech.isSpeaking || self.busy) && waited < 150 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
             // Jarvis' own words coming back through the microphone must be ignored.
             let echo = "I have finished the task you asked for, sir."
             self.speech.speak(echo, language: .english)

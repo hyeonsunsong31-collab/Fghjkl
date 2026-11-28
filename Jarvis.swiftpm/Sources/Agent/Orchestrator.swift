@@ -303,7 +303,15 @@ final class Orchestrator {
                                  verbosity: decision.cerebellar.verbosity, correction: nil)
         let messageID = c.appendMessage(.assistant, "", language: language, streaming: true)
         var streamed = ""
+        // Text from an engine that was given up on (timed out) must not reach the chat later.
+        let primaryOpen = StreamGate()
         let onText: (String) -> Void = { [weak controller = self.c] delta in
+            guard let controller, primaryOpen.isOpen else { return }
+            streamed += delta
+            controller.updateMessage(messageID, text: streamed, streaming: true)
+            controller.speech.appendStream(delta, language: language)
+        }
+        let onFallbackText: (String) -> Void = { [weak controller = self.c] delta in
             guard let controller else { return }
             streamed += delta
             controller.updateMessage(messageID, text: streamed, streaming: true)
@@ -312,12 +320,22 @@ final class Orchestrator {
 
         var llm: LLMResult
         do {
-            llm = try await engine.respond(request, onText: onText)
+            // A hung on-device model must not hang the turn (nor the voice commands queued behind it).
+            let ask = request
+            let limit: Double = request.withTools ? 45 : 25
+            llm = try await withDeadline(seconds: limit) { try await engine.respond(ask, onText: onText) }
         } catch {
+            primaryOpen.isOpen = false
             if Task.isCancelled { return (AgentTurnResult(reply: streamed, language: language, success: false), 0) }
-            // Fall back to the built-in engine and explain what went wrong.
+            // Fall back to the built-in engine and explain what went wrong (start the reply afresh).
             let cause = String(describing: error)
-            llm = (try? await c.fallback.respond(request, onText: onText)) ?? LLMResult(reply: "", engineName: "none")
+            Log.agent.error("Language model failed (\(cause, privacy: .public)); using the built-in engine")
+            if !streamed.isEmpty {
+                c.speech.stop()
+                streamed = ""
+                c.updateMessage(messageID, text: "", streaming: true)
+            }
+            llm = (try? await c.fallback.respond(request, onText: onFallbackText)) ?? LLMResult(reply: "", engineName: "none")
             llm.errorExplanation = language == .korean ? "언어 모델 오류: \(cause)" : "Language model error: \(cause)"
         }
         c.speech.finishStream(language: language)
@@ -335,7 +353,8 @@ final class Orchestrator {
                 request.correction = outputControl.correctionInstruction(for: remote, language: language)
                 request.context = []
                 c.speech.stop()
-                if let corrected = try? await engine.respond(request, onText: { _ in }) {
+                let fix = request
+                if let corrected = try? await withDeadline(seconds: 25, { try await engine.respond(fix, onText: { _ in }) }) {
                     let fixed = outputControl.repair(corrected.reply, violations: outputControl.verify(corrected.reply, expected: language,
                                                                                                     toolsSucceeded: corrected.toolsSucceeded,
                                                                                                     characterLimit: charLimit, forSpeech: true).filter { $0.isRepairableLocally },
@@ -390,4 +409,11 @@ final class Orchestrator {
         let l = reply.lowercased()
         return OutputController.englishCompletionClaims.contains { l.contains($0) } || OutputController.koreanCompletionClaims.contains { reply.contains($0) }
     }
+}
+
+
+/// Lets an abandoned stream be shut off (main actor only).
+@MainActor
+final class StreamGate {
+    var isOpen = true
 }
