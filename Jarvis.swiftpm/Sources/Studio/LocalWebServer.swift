@@ -16,14 +16,25 @@ final class LocalWebServer: @unchecked Sendable {
     /// Serve `folder`; returns the base link (http://<Wi-Fi address>:<port>/), or nil if no
     /// port could be opened.
     func serve(_ folder: URL) async -> URL? {
-        lock.lock()
-        self.folder = folder.standardizedFileURL
-        let running = listener != nil && port != 0
-        let current = port
-        lock.unlock()
+        let (running, current) = setFolder(folder)
         if running { return Self.link(port: current) }
         guard let opened = await open() else { return nil }
         return Self.link(port: opened)
+    }
+
+    /// Point the server at `folder`; returns whether it is already listening, and on which port.
+    private func setFolder(_ folder: URL) -> (Bool, UInt16) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.folder = folder.standardizedFileURL
+        return (listener != nil && port != 0, port)
+    }
+
+    private func adopt(_ l: NWListener, port p: UInt16) {
+        lock.lock()
+        defer { lock.unlock() }
+        listener = l
+        port = p
     }
 
     func stop() {
@@ -64,10 +75,7 @@ final class LocalWebServer: @unchecked Sendable {
             l.cancel()
             return nil
         }
-        lock.lock()
-        listener = l
-        port = p
-        lock.unlock()
+        adopt(l, port: p)
         return p
     }
 
@@ -103,7 +111,7 @@ final class LocalWebServer: @unchecked Sendable {
         if parts.count >= 2, parts[0] == "GET" || parts[0] == "HEAD", let file = resolve(String(parts[1])) {
             if let data = try? Data(contentsOf: file) {
                 body = parts[0] == "HEAD" ? Data() : data
-                type = Packager.type(forPath: file.path)
+                type = MIME.type(forPath: file.path)
                 if type.hasPrefix("text/") || type.contains("javascript") || type.contains("json") { type += "; charset=utf-8" }
             } else {
                 status = "404 Not Found"
