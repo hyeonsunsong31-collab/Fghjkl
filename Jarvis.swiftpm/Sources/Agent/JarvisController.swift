@@ -863,12 +863,20 @@ final class JarvisController {
                 Log.agent.info("Audio test: recognition not authorised here")
                 return
             }
+            self.speechInput.onTestHeard = { heard in
+                Log.agent.info("Audio test: the recognisers heard '\(heard, privacy: .public)'")
+            }
             let clip = await AudioTestSupport.microphoneLikeClip(text, language: .english)
             let secs = String(format: "%.1f", clip.speechSeconds)
             Log.agent.info("Audio test: rendered \(secs, privacy: .public)s of speech in \(clip.buffers.count, privacy: .public) buffers")
-            try? await Task.sleep(nanoseconds: 1_000_000_000)   // let the recognisers start
+            // Room noise first, as a live microphone would give, so the recognisers settle.
+            let quiet = await AudioTestSupport.microphoneLikeClip("", language: .english, quietSeconds: 3)
+            await self.speechInput.feedTestAudio(quiet.buffers)
             let before = self.messages.count
+            let fed = Date()
             await self.speechInput.feedTestAudio(clip.buffers)
+            let feedSecs = String(format: "%.1f", Date().timeIntervalSince(fed))
+            Log.agent.info("Audio test: fed the speech in \(feedSecs, privacy: .public)s")
             var waited = 0
             while waited < 120 && !self.messages.dropFirst(before).contains(where: { $0.role == .user }) {
                 try? await Task.sleep(nanoseconds: 100_000_000)

@@ -12,16 +12,18 @@ enum AudioTestSupport {
 
     /// `text` spoken by the best system voice for `language`, as 1024-frame mono float buffers
     /// with 1 s of quiet before and 2.5 s after (so the level detector sees the speech end).
-    static func microphoneLikeClip(_ text: String, language: DetectedLanguage) async -> Clip {
-        let rendered = await render(text, language: language)
-        guard rendered.rate > 0, !rendered.samples.isEmpty,
+    /// An empty `text` gives `quietSeconds` of room noise only.
+    static func microphoneLikeClip(_ text: String, language: DetectedLanguage, quietSeconds: Double = 0) async -> Clip {
+        var rendered: (samples: [Float], rate: Double) = ([], 22_050)
+        if !text.isEmpty { rendered = await render(text, language: language) }
+        guard rendered.rate > 0, !rendered.samples.isEmpty || text.isEmpty,
               let format = AVAudioFormat(standardFormatWithSampleRate: rendered.rate, channels: 1) else {
             return Clip(buffers: [], speechSeconds: 0)
         }
         func quiet(_ seconds: Double) -> [Float] {
             (0..<Int(seconds * rendered.rate)).map { _ in Float.random(in: -0.0006...0.0006) }
         }
-        let all: [Float] = quiet(1.0) + rendered.samples + quiet(2.5)
+        let all: [Float] = text.isEmpty ? quiet(quietSeconds) : quiet(1.0) + rendered.samples + quiet(2.5)
         var buffers: [AVAudioPCMBuffer] = []
         var start = 0
         while start < all.count {

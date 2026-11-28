@@ -6,6 +6,12 @@ enum LanguageMode: String, Codable, CaseIterable {
     case auto, korean, english
 }
 
+/// Buffers handed to a background feeding thread (CI only).
+private final class TestAudioFeed: @unchecked Sendable {
+    let buffers: [AVAudioPCMBuffer]
+    init(_ buffers: [AVAudioPCMBuffer]) { self.buffers = buffers }
+}
+
 /// Thread-safe bridge between the realtime audio tap and the recognisers. It also
 /// keeps simple health figures of the microphone signal for the service's watchdog.
 private final class AudioRouter: @unchecked Sendable {
@@ -568,14 +574,28 @@ final class SpeechInputService {
         return true
     }
 
-    /// CI: feed audio as if the microphone had heard it, at real-time pace.
+    /// CI: feed audio as if the microphone had heard it — from a background thread at real-time
+    /// pace, like the microphone's own audio thread (never the main thread).
     func feedTestAudio(_ buffers: [AVAudioPCMBuffer]) async {
-        for buffer in buffers {
-            router.handle(buffer)
-            let seconds: Double = Double(buffer.frameLength) / max(1, buffer.format.sampleRate)
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        let router = self.router
+        let feed = TestAudioFeed(buffers)
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let start = Date()
+                var due: Double = 0
+                for buffer in feed.buffers {
+                    router.handle(buffer)
+                    due += Double(buffer.frameLength) / max(1, buffer.format.sampleRate)
+                    let wait = due - Date().timeIntervalSince(start)
+                    if wait > 0 { Thread.sleep(forTimeInterval: wait) }
+                }
+                c.resume()
+            }
         }
     }
+
+    /// CI: what the recognisers heard (test speech only, never the user's).
+    var onTestHeard: ((String) -> Void)?
 
     /// A session ended on its own: restart that language only, backing off on real failures.
     private func sessionEnded(_ session: Session, failure: SpeechFailure?) {
@@ -690,6 +710,7 @@ final class SpeechInputService {
             if !trimmed.isEmpty {
                 preferredLanguage = language
                 if pushToTalkActive { deliveredDuringPushToTalk = true }
+                onTestHeard?(trimmed)
                 onUtterance?(trimmed, language, confidence)
             }
         }
