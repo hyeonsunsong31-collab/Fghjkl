@@ -25,9 +25,9 @@ struct DesignPrompt: Equatable {
     Materials: paint, plastic, metal, chrome, glass, rubber, wood, stone, fabric, emissive (lights that glow).
     Colors: red, orange, yellow, lime, green, darkgreen, teal, cyan, blue, navy, purple, pink, maroon, white, beige, \
     brown, gold, silver, gray, darkgray, black.
-    Use 15 to 40 parts: first the large masses with realistic proportions, then the details that make it \
-    recognisable (windows, lights, trims, handles, joints). Make left/right pairs with mirror. Overall size 0.5 to \
-    1.5 metres unless a size is given.
+    Use 12 to 24 parts: first the large masses with realistic proportions, then the details that make it \
+    recognisable (windows, lights, trims, handles, joints). Make left/right pairs with mirror and repeats with \
+    radial instead of listing each copy. Overall size 0.5 to 1.5 metres unless a size is given.
     Example, a desk lamp: base cylinder at (0, 0.015, 0) size 0.2×0.03×0.2 darkgray metal; arm cylinder at \
     (0, 0.17, -0.04) size 0.02×0.31×0.02 rx -15; joint sphere at (0, 0.32, -0.08) size 0.04; upper arm cylinder at \
     (0, 0.37, 0.05) size 0.02×0.28×0.02 rx 62; shade frustum at (0, 0.36, 0.2) size 0.16×0.13×0.16 rx 25 white metal; \

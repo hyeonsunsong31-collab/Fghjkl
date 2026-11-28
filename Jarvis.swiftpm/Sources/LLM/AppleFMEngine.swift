@@ -198,7 +198,7 @@ enum AppleFMDesigner {
         guard isAvailable else { return nil }
         do {
             let session = LanguageModelSession(instructions: prompt.instructions)
-            let options = GenerationOptions(temperature: 0.35, maximumResponseTokens: 2600)
+            let options = GenerationOptions(temperature: 0.35, maximumResponseTokens: 2400)
             let response = try await session.respond(to: prompt.prompt, generating: GeneratedModelSpec.self, options: options)
             return convert(response.content)
         } catch {

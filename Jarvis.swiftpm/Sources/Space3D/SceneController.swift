@@ -185,8 +185,11 @@ final class SceneController {
     }
 
     func panCamera(dx: Float, dy: Float) {
+        let scale: Float = 0.0015 * distance
         let right = SIMD3<Float>(cos(azimuth), 0, -sin(azimuth))
-        target += right * (-dx * 0.0015 * distance) + SIMD3(0, dy * 0.0015 * distance, 0)
+        let sideways: SIMD3<Float> = right * (-dx * scale)
+        let upwards = SIMD3<Float>(0, dy * scale, 0)
+        target += sideways + upwards
         updateCamera()
     }
 

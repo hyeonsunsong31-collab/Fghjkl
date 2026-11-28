@@ -16,7 +16,7 @@ struct EulerRotation {
         let rx = Mat3(SIMD3(1, 0, 0), SIMD3(0, cx, -sx), SIMD3(0, sx, cx))
         let ry = Mat3(SIMD3(cy, 0, sy), SIMD3(0, 1, 0), SIMD3(-sy, 0, cy))
         let rz = Mat3(SIMD3(cz, -sz, 0), SIMD3(sz, cz, 0), SIMD3(0, 0, 1))
-        let m = ry * rx * rz
+        let m = ry.times(rx).times(rz)
         row0 = m.row0
         row1 = m.row1
         row2 = m.row2
@@ -29,12 +29,14 @@ struct EulerRotation {
     private struct Mat3 {
         let row0: SIMD3<Float>, row1: SIMD3<Float>, row2: SIMD3<Float>
         init(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>) { row0 = a; row1 = b; row2 = c }
-        static func * (l: Mat3, r: Mat3) -> Mat3 {
-            let c0 = SIMD3(r.row0.x, r.row1.x, r.row2.x)
-            let c1 = SIMD3(r.row0.y, r.row1.y, r.row2.y)
-            let c2 = SIMD3(r.row0.z, r.row1.z, r.row2.z)
-            func row(_ v: SIMD3<Float>) -> SIMD3<Float> { SIMD3(simdDot(v, c0), simdDot(v, c1), simdDot(v, c2)) }
-            return Mat3(row(l.row0), row(l.row1), row(l.row2))
+        /// Matrix product (a named method: a custom `*` overload would slow down type-checking of
+        /// every vector expression in the app on Swift Playground's compiler).
+        func times(_ r: Mat3) -> Mat3 {
+            let c0 = SIMD3<Float>(r.row0.x, r.row1.x, r.row2.x)
+            let c1 = SIMD3<Float>(r.row0.y, r.row1.y, r.row2.y)
+            let c2 = SIMD3<Float>(r.row0.z, r.row1.z, r.row2.z)
+            func row(_ v: SIMD3<Float>) -> SIMD3<Float> { SIMD3<Float>(simdDot(v, c0), simdDot(v, c1), simdDot(v, c2)) }
+            return Mat3(row(row0), row(row1), row(row2))
         }
     }
 }

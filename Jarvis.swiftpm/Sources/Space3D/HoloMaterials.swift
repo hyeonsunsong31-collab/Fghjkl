@@ -104,19 +104,19 @@ enum HoloMaterials {
             m.emissiveIntensity = glow + 0.12
             m.blending = .transparent(opacity: .init(floatLiteral: 0.42))
         case "rubber":
-            m.metallic = 0
+            m.metallic = 0.0
             m.roughness = 0.92
         case "wood":
-            m.metallic = 0
+            m.metallic = 0.0
             m.roughness = 0.7
         case "stone":
-            m.metallic = 0
+            m.metallic = 0.0
             m.roughness = 0.88
         case "fabric":
-            m.metallic = 0
+            m.metallic = 0.0
             m.roughness = 0.96
         case "emissive":
-            m.metallic = 0
+            m.metallic = 0.0
             m.roughness = 0.4
             m.emissiveIntensity = selected ? 2.6 : 2.0
         default:

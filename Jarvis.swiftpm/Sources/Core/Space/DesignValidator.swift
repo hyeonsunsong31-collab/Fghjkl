@@ -18,7 +18,7 @@ enum DesignValidator {
     /// What the design still gets wrong (for a retry by the language model).
     static func compliance(_ spec: ModelSpec, brief: DesignBrief) -> [String] {
         var issues: [String] = []
-        if spec.parts.count < 3 { issues.append("too few parts (\(spec.parts.count)); build a recognisable model with 15 to 40 parts") }
+        if spec.parts.count < 3 { issues.append("too few parts (\(spec.parts.count)); build a recognisable model with 12 to 24 parts") }
         for feature in brief.features where !DesignLibrary.generic.contains(feature) {
             if spec.parts(of: feature).isEmpty { issues.append("missing \(feature) (name the part \"\(feature)\")") }
         }

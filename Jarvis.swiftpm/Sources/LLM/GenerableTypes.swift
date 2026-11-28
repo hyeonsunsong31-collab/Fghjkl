@@ -551,7 +551,7 @@ struct GeneratedModelSpec {
             type: Self.self,
             properties: [
                 GenerationSchema.Property(name: "name", description: "Short name of the object", type: String.self),
-                GenerationSchema.Property(name: "parts", description: "Parts that together form a recognisable, well-proportioned model with every requested detail", type: [GeneratedPart].self, guides: [.maximumCount(28)])
+                GenerationSchema.Property(name: "parts", description: "Parts that together form a recognisable, well-proportioned model with every requested detail", type: [GeneratedPart].self, guides: [.maximumCount(24)])
             ]
         )
     }
