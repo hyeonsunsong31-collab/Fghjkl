@@ -178,7 +178,9 @@ enum GamesTwo {
           K.seed(5); K.begin();
           s.enemies = [{ x: s.ship.x, y: s.ship.y - 200, w: 34, h: 24, row: 0 }, { x: 10, y: 60, w: 34, h: 24, row: 0 }];
           s.shots = [];
+          s.dir = 0;   // hold the formation still: the target stays above the ship
           K.press('action'); K.step(30); K.release('action');
+          s.dir = 1;
           check(s.enemies.length === 1 && s.score > 0, 'shooting an enemy destroys it and scores');
           var lives = s.lives;
           s.hurt = 0; s.shield = false;

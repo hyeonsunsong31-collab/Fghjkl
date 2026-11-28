@@ -46,6 +46,19 @@ enum ProgramLibrary {
                      defaults: ["target": 7]),
         TemplateInfo(id: "hopper", kind: "game", nameEN: "Sky Hopper", nameKO: "스카이 호퍼", features: ["lives", "powerups", "difficulty", "music"],
                      pad: ["action"], controlsEN: "Space, click or tap to flap", controlsKO: "스페이스, 클릭 또는 탭으로 날갯짓", defaults: ["lives": 1]),
+        TemplateInfo(id: "shooter", kind: "game", nameEN: "Star Defender", nameKO: "스타 디펜더",
+                     features: ["levels", "lives", "powerups", "boss", "enemies", "difficulty", "music"],
+                     pad: ["left", "action", "right"], controlsEN: "← → or drag to move · hold Space or touch to fire · P pause",
+                     controlsKO: "← → 또는 드래그로 이동 · 스페이스를 누르거나 화면을 눌러 발사 · P 일시정지", defaults: ["lives": 3]),
+        TemplateInfo(id: "runner", kind: "game", nameEN: "Dash Runner", nameKO: "대시 러너", features: ["lives", "powerups", "enemies", "music"],
+                     pad: ["down", "action"], controlsEN: "Space, ↑ or tap to jump · ↓ to duck · P pause",
+                     controlsKO: "스페이스, ↑ 또는 탭으로 점프 · ↓ 로 숙이기 · P 일시정지", defaults: ["lives": 1]),
+        TemplateInfo(id: "dodge", kind: "game", nameEN: "Star Dodge", nameKO: "스타 닷지", features: ["lives", "timer", "enemies", "music"],
+                     pad: ["left", "right"], controlsEN: "← → or drag to move · P pause", controlsKO: "← → 또는 드래그로 이동 · P 일시정지",
+                     defaults: ["lives": 3]),
+        TemplateInfo(id: "platformer", kind: "game", nameEN: "Pixel Quest", nameKO: "픽셀 퀘스트", features: ["levels", "lives", "enemies", "music"],
+                     pad: ["left", "right", "action"], controlsEN: "← → to run · Space / ↑ to jump (hold for higher) · P pause",
+                     controlsKO: "← → 로 달리기 · 스페이스 / ↑ 로 점프 (길게 누르면 더 높이) · P 일시정지", defaults: ["lives": 3, "levels": 3]),
     ]
 
     static func info(_ id: String) -> TemplateInfo? { catalog.first { $0.id == id } }
@@ -87,6 +100,10 @@ enum ProgramLibrary {
         case "breakout": return GamesOne.breakout
         case "pong": return GamesOne.pong
         case "hopper": return GamesOne.hopper
+        case "shooter": return GamesTwo.shooter
+        case "runner": return GamesTwo.runner
+        case "dodge": return GamesTwo.dodge
+        case "platformer": return GamesTwo.platformer
         default: return nil
         }
     }
@@ -169,13 +186,17 @@ enum ProgramLibrary {
             ("paused", "일시정지"), ("pausedHint", "P를 누르거나 탭하면 계속합니다"), ("resume", "계속"), ("youWin", "승리!"), ("level", "레벨"),
             ("lives", "목숨"), ("time", "시간"), ("timeUp", "시간 종료"), ("launch", "탭하거나 스페이스를 눌러 발사"), ("firstTo", "목표 점수"),
             ("twoPlayers", "2인용"), ("vsComputer", "컴퓨터와 대결"), ("leftWins", "왼쪽 플레이어 승리"), ("rightWins", "오른쪽 플레이어 승리"),
-            ("controls", info.controlsKO),
+            ("controls", info.controlsKO), ("wave", "웨이브"), ("survived", "버텼습니다!"),
         ]
         let intros: [String: String] = [
             "snake": "방향키나 스와이프로 조종하세요.\n먹이를 먹고 자라세요 — 벽과 꼬리는 피하세요.",
             "breakout": "← → 또는 드래그로 움직이고, 스페이스나 탭으로 공을 발사하세요.\n벽돌을 모두 깨세요!",
             "pong": "↑ ↓ 또는 드래그로 패들을 움직이세요. 컴퓨터를 이기세요!",
             "hopper": "탭, 클릭 또는 스페이스로 날갯짓하세요.\n틈 사이로 날아가세요!",
+            "shooter": "← → 또는 드래그로 움직이고, 스페이스를 누르거나 화면을 눌러 발사하세요.\n모든 웨이브를 물리치세요!",
+            "runner": "스페이스, ↑ 또는 탭으로 점프하고 ↓ 로 숙이세요.\n최대한 멀리 달리세요!",
+            "dodge": "← → 또는 드래그로 움직이세요.\n빨간 것은 피하고 별은 잡으세요!",
+            "platformer": "← → 로 달리고 스페이스 / ↑ 로 점프하세요 (길게 누르면 더 높이).\n적을 밟고, 동전을 모으고, 깃발까지 가세요!",
         ]
         if let intro = intros[info.id] { s.append(("intro", intro)) }
         if info.id == "pong" { s.append(("intro2", "왼쪽: W / S · 오른쪽: ↑ / ↓ (각 절반을 드래그해도 됩니다)")) }
