@@ -271,6 +271,27 @@ jobs:
           done
           if grep -E "Design.*missing=\[[^]]" ../app-log-design.txt; then echo "A REQUESTED DETAIL WAS NOT BUILT ❌"; exit 1; else echo "EVERY REQUESTED DETAIL BUILT ✅"; fi
           t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
+
+          phase "2d real input paths"
+          # 2d) Type into the actual text field through UIKit (focus, keystrokes, Return), and feed
+          # speech results through the same voice gate as the microphone: a command, Jarvis' own
+          # echo (must be ignored) and "Jarvis, ..." while asleep.
+          xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
+            --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log-input.txt 2>&1 &
+          LOGPID=$!
+          t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES -JarvisResetScene YES \
+            -JarvisTypeTest "make a red cube" -JarvisVoiceTest "make a blue sphere"
+          sleep 45
+          shot ../screenshot-input.png
+          kill $LOGPID || true
+          echo "---- app log (input) ----"; grep -E "Type test|Voice test|Voice gate|Turn|Input handled|Main thread" ../app-log-input.txt | tail -40 || true
+          for EXPECT in "Type test: field=true tappable=true" "focused=true typed=true submitted=true" "Voice test: command delivered=true" \
+                        "Voice test: echo ignored=true" "Voice test: named command while asleep=true" "Input handled (text)" "Input handled (voice)"; do
+            if grep -q "$EXPECT" ../app-log-input.txt; then echo "$EXPECT ✅"; else echo "MISSING: $EXPECT ❌"; exit 1; fi
+          done
+          if [ "$(grep -c 'intents=createObject success=true' ../app-log-input.txt)" -lt 2 ]; then echo "TYPED AND SPOKEN COMMANDS DID NOT BOTH RUN ❌"; exit 1; fi
+          echo "TYPING AND SPEAKING BOTH REACH JARVIS ✅"
+          t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
           phase "3 Begin button"
           # 3) The onboarding "Begin" button: wake with spoken reply and microphone capture,
           #    forcing the direct-synthesizer fallback that used to crash on devices.
@@ -318,8 +339,10 @@ jobs:
             screenshot-emergency.png
             screenshot-design-car.png
             screenshot-designs.png
+            screenshot-input.png
             app-log.txt
             app-log-begin.txt
             app-log-music.txt
             app-log-emergency.txt
             app-log-design.txt
+            app-log-input.txt

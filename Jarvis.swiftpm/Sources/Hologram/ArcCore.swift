@@ -11,9 +11,11 @@ struct ArcCore: View {
     var phase: AssistantPhase
     var level: Float
     var size: CGFloat = 220
+    var paused = false
 
     var body: some View {
-        TimelineView(.animation) { (context: TimelineViewDefaultContext) in
+        // 30 fps is smooth for slow rings; uncapped, a 120 Hz iPad redrew this 120 times a second.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { (context: TimelineViewDefaultContext) in
             ArcCoreCanvas(phase: phase, level: level, time: context.date.timeIntervalSinceReferenceDate)
         }
         .frame(width: size, height: size)
@@ -143,13 +145,34 @@ enum ArcCoreDrawing {
     }
 }
 
+/// The core, reading the live phase and microphone level itself (so only it redraws when they change).
+struct LiveArcCore: View {
+    @Environment(JarvisController.self) private var jarvis
+    var size: CGFloat
+
+    var body: some View {
+        let speaking: Bool = jarvis.phase == .speaking
+        ArcCore(phase: jarvis.phase, level: speaking ? 0.6 : jarvis.inputLevel, size: size, paused: jarvis.typing)
+    }
+}
+
+/// The waveform, reading the live level itself.
+struct LiveWaveform: View {
+    @Environment(JarvisController.self) private var jarvis
+
+    var body: some View {
+        HoloWaveform(level: jarvis.inputLevel, color: Holo.phaseColor(jarvis.phase), paused: jarvis.typing)
+    }
+}
+
 /// Live audio-level waveform bar.
 struct HoloWaveform: View {
     var level: Float
     var color: Color = Holo.cyan
+    var paused = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { (context: TimelineViewDefaultContext) in
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: paused)) { (context: TimelineViewDefaultContext) in
             WaveformCanvas(level: CGFloat(level), color: color, time: CGFloat(context.date.timeIntervalSinceReferenceDate))
         }
         .holoGlow(color, radius: 5)

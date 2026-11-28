@@ -25,9 +25,10 @@ struct RootView: View {
                         .onChange(of: geo.size) { _, size in jarvis.scene.framingInsets = Self.hudInsets(size) }
                     if jarvis.handTrackingEnabled { HandOverlay().ignoresSafeArea() }
                 } else {
-                    HexBackdrop()
+                    // Decoration pauses while typing so the keyboard always gets the main thread.
+                    HexBackdrop(paused: jarvis.typing)
                 }
-                Scanlines().ignoresSafeArea()
+                Scanlines(paused: jarvis.typing).ignoresSafeArea()
 
                 VStack(spacing: 10) {
                     StatusBar()
@@ -40,9 +41,10 @@ struct RootView: View {
                         }
                     } else {
                         Spacer(minLength: 0)
-                        ArcCore(phase: jarvis.phase, level: jarvis.phase == .speaking ? 0.6 : jarvis.inputLevel,
-                                size: min(geo.size.width, geo.size.height) * (wide ? 0.34 : 0.5))
-                            .onTapGesture { jarvis.isAwake ? jarvis.sleep() : jarvis.wake(source: .button) }
+                        // Tap: wake up / listen afresh (never sleep). Long press: go to sleep.
+                        LiveArcCore(size: min(geo.size.width, geo.size.height) * (wide ? 0.34 : 0.5))
+                            .onLongPressGesture(minimumDuration: 0.8) { jarvis.sleep() }
+                            .onTapGesture { jarvis.coreTapped() }
                         if !jarvis.isAwake {
                             Text(jarvis.currentLanguage == .korean ? "\"Wake up Jarvis\" 라고 말씀하시거나 비상 웨이크 버튼을 누르십시오"
                                                                    : "Say \"Wake up Jarvis\" or press the emergency wake button")
@@ -50,7 +52,7 @@ struct RootView: View {
                                 // Hidden (layout kept) while the onboarding card sits on top of it.
                                 .opacity(jarvis.activePanel == .onboarding ? 0 : 1)
                         } else {
-                            HoloWaveform(level: jarvis.inputLevel, color: Holo.phaseColor(jarvis.phase)).frame(width: 220, height: 28)
+                            LiveWaveform().frame(width: 220, height: 28)
                         }
                         Spacer(minLength: 0)
                     }

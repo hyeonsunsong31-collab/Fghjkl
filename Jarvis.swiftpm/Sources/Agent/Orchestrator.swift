@@ -33,7 +33,8 @@ final class Orchestrator {
 
     // MARK: Turn
 
-    func handle(_ raw: String, modality: InputModality, languageHint: DetectedLanguage?, confidence: Double?) async {
+    /// `alreadyShown`: the request is already in the chat (shown the moment it was submitted).
+    func handle(_ raw: String, modality: InputModality, languageHint: DetectedLanguage?, confidence: Double?, alreadyShown: Bool = false) async {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         turnCounter += 1
@@ -68,7 +69,7 @@ final class Orchestrator {
         if let pendingCommand = c.pendingConfirmation {
             c.pendingConfirmation = nil
             if let yes = ConfirmationReply.classify(text) {
-                c.appendMessage(.user, text, language: language)
+                if !alreadyShown { c.appendMessage(.user, text, language: language) }
                 c.records.logMessage(role: "user", text: text, language: language, runID: nil)
                 let answer: String = yes ? "yes" : "no"
                 Log.agent.info("Confirmation answered: \(answer, privacy: .public)")
@@ -84,7 +85,7 @@ final class Orchestrator {
 
         let commandID = c.records.logCommand(text: text, modality: modality, language: language, transcript: modality == .voice ? raw : nil,
                                              confidence: confidence, intent: nil)
-        c.appendMessage(.user, text, language: language)
+        if !alreadyShown { c.appendMessage(.user, text, language: language) }
         c.records.logMessage(role: "user", text: text, language: language, runID: nil)
         c.phase = .thinking
 

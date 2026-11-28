@@ -130,6 +130,15 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
 
     /// Is `heard` most likely Jarvis' own voice (echo) rather than the user?
     /// True when most of its words were spoken by Jarvis in the last few seconds.
+    /// Seconds since Jarvis last stopped speaking (very large if it never spoke).
+    var secondsSinceSpeechEnded: Double { isSpeaking ? 0 : Date().timeIntervalSince(lastSpeechEnd) }
+
+    /// What Jarvis said in the last `seconds`, including the sentence it is saying now (for the voice gate).
+    func recentSpokenText(within seconds: TimeInterval = 8) -> String {
+        let now = Date()
+        return (spokenHistory.filter { now.timeIntervalSince($0.time) < seconds }.map(\.text) + [currentText]).joined(separator: " ")
+    }
+
     func isLikelyEcho(_ heard: String, within seconds: TimeInterval = 8) -> Bool {
         let now = Date()
         // Echo is only physically possible while (or just after) the speaker is playing.

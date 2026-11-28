@@ -144,8 +144,25 @@ final class SpeechInputService {
         var disabledUntil = Date.distantPast
     }
 
+    /// What the microphone side is doing, for the on-screen status.
+    enum State: Equatable {
+        case off, starting, listening, denied
+        case failed(String)
+    }
+
     var onPartial: ((String) -> Void)?
     var onUtterance: ((String, DetectedLanguage, Double) -> Void)?
+    var onState: ((State) -> Void)?
+    /// Push-to-talk ended without any recognised words.
+    var onNothingHeard: (() -> Void)?
+    private(set) var state: State = .off { didSet { if oldValue != state { onState?(state) } } }
+    /// The user holds the talk button: no automatic endpointing, everything heard is delivered on release.
+    private(set) var pushToTalkActive = false
+    private var deliveredDuringPushToTalk = false
+    /// Released, final words still being delivered (they still count as push-to-talk).
+    private var releasingPushToTalk = false
+    private var nameCommandTask: Task<Void, Never>?
+    private var nameCommandText = ""
     var onWake: ((WakeWordMatcher.Match) -> Void)?
     var onSpeechActivity: ((Bool) -> Void)?
     var onLevel: ((Float) -> Void)?
@@ -213,9 +230,11 @@ final class SpeechInputService {
         guard !isRunning, !starting else { return }
         starting = true
         defer { starting = false }
+        state = .starting
         if !isAuthorized { _ = await requestAuthorization() }
-        guard wantsRunning else { return }
+        guard wantsRunning else { state = .off; return }
         guard isAuthorized else {
+            state = .denied
             onError?("음성 인식·마이크 권한이 꺼져 있습니다 (설정 › Swift Playground) · Speech or microphone permission denied")
             return
         }
@@ -234,6 +253,7 @@ final class SpeechInputService {
                 let reason = error.localizedDescription
                 Log.voice.error("Microphone start failed (attempt \(attempt, privacy: .public)): \(reason, privacy: .public)")
                 if attempt >= 6 {
+                    state = .failed(reason)
                     onError?("마이크를 시작하지 못했습니다 · Microphone unavailable: \(reason)")
                     return
                 }
@@ -244,6 +264,7 @@ final class SpeechInputService {
             }
         }
         isRunning = true
+        state = .listening
         router.resetHealth()
         let languages: String = wantedLanguages.map { $0.rawValue }.joined(separator: "+")
         Log.voice.info("Listening started (\(languages, privacy: .public))")
@@ -269,6 +290,10 @@ final class SpeechInputService {
     func stop() {
         wantsRunning = false
         isRunning = false
+        pushToTalkActive = false
+        releasingPushToTalk = false
+        nameCommandTask?.cancel()
+        state = .off
         watchdog?.cancel()
         finalizeDeadline?.cancel()
         finalizing = false
@@ -405,13 +430,18 @@ final class SpeechInputService {
         case .wakeOnly:
             if let text = hypothesis?.text, let match = wakeMatcher.match(text) {
                 Log.voice.info("Wake phrase heard (\(language.rawValue, privacy: .public))")
-                cancelAll()
-                onWake?(match)
-                // `onWake` normally switches to conversation mode, which restarts recognition itself.
-                if isRunning && sessions.isEmpty && pendingBegins.isEmpty {
-                    for l in wantedLanguages { scheduleBegin(l, after: 0.15) }
-                }
+                acceptWake(match)
                 return
+            }
+            // A command addressed by name ("Jarvis, open YouTube", "자비스 음악 틀어줘") also wakes Jarvis,
+            // once the words stop changing (or the recogniser finishes the sentence).
+            if let text = hypothesis?.text, let named = wakeMatcher.matchNamePrefix(text) {
+                if hypothesis?.isFinal == true {
+                    Log.voice.info("Named command heard while asleep (\(language.rawValue, privacy: .public))")
+                    acceptWake(named)
+                    return
+                }
+                armNameCommand(text)
             }
             if ended { sessionEnded(session, failure: failure) }
         case .conversation:
@@ -430,11 +460,86 @@ final class SpeechInputService {
             }
             let heardText: Bool = !(session.latest?.text.isEmpty ?? true)
             if hypothesis?.isFinal == true && failure == nil && heardText {
-                // The recogniser endpointed by itself.
+                // The recogniser endpointed by itself (in push-to-talk too: the sentence is complete).
                 finalize()
             } else if ended {
                 sessionEnded(session, failure: failure)
             }
+        }
+    }
+
+    private func acceptWake(_ match: WakeWordMatcher.Match) {
+        nameCommandTask?.cancel()
+        nameCommandText = ""
+        cancelAll()
+        onWake?(match)
+        // `onWake` normally switches to conversation mode, which restarts recognition itself.
+        if isRunning && sessions.isEmpty && pendingBegins.isEmpty {
+            for l in wantedLanguages { scheduleBegin(l, after: 0.15) }
+        }
+    }
+
+    private func armNameCommand(_ text: String) {
+        guard text != nameCommandText else { return }
+        nameCommandText = text
+        nameCommandTask?.cancel()
+        nameCommandTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_300_000_000)
+            guard !Task.isCancelled, let self, self.mode == .wakeOnly, self.nameCommandText == text,
+                  let named = self.wakeMatcher.matchNamePrefix(text) else { return }
+            Log.voice.info("Named command heard while asleep (stable)")
+            self.acceptWake(named)
+        }
+    }
+
+    // MARK: Push to talk
+
+    /// The talk button went down: listen afresh, without automatic endpointing.
+    func beginPushToTalk() {
+        pushToTalkActive = true
+        deliveredDuringPushToTalk = false
+        stabilityTask?.cancel()
+        finalizeDeadline?.cancel()
+        finalizing = false
+        if mode != .conversation { mode = .conversation } else if isRunning { restartAll() }
+        if !isRunning { Task { await start() } }
+        Log.voice.info("Push to talk: listening")
+    }
+
+    /// The talk button came up: deliver what was heard (after a moment for the last word).
+    func endPushToTalk() {
+        guard pushToTalkActive else { return }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard let self, self.pushToTalkActive else { return }
+            let heard: Bool = self.bestHypothesis() != nil
+            if heard && !self.sessions.isEmpty {
+                self.releasingPushToTalk = true
+                if self.finalizing { return }   // already delivering; deliverUtterance ends push-to-talk
+                self.finalize()
+            } else {
+                self.pushToTalkActive = false
+                if !self.deliveredDuringPushToTalk && !self.finalizing {
+                    Log.voice.info("Push to talk: nothing heard")
+                    self.onNothingHeard?()
+                    self.restartAll()
+                }
+            }
+        }
+    }
+
+    // MARK: Automated tests
+
+    /// Behave as if the recognisers had just heard `text` (CI has no microphone): the same wake,
+    /// named-command and utterance paths as real recognition.
+    func simulateHeard(_ text: String, language: DetectedLanguage) {
+        Log.voice.info("Simulated speech (\(language.rawValue, privacy: .public))")
+        switch mode {
+        case .wakeOnly:
+            if let match = wakeMatcher.match(text) ?? wakeMatcher.matchNamePrefix(text) { onWake?(match) }
+        case .conversation:
+            onPartial?(text)
+            onUtterance?(text, language, 0.9)
         }
     }
 
@@ -496,6 +601,7 @@ final class SpeechInputService {
 
     private func reportFailure(_ failure: SpeechFailure?) {
         let code: String = failure?.summary ?? "-"
+        state = .failed(code)
         onError?("음성 인식이 계속 실패합니다 (\(code)). 설정 › 일반 › 키보드 › 받아쓰기가 켜져 있는지 확인해 주십시오 · Speech recognition keeps failing; make sure Dictation is on.")
     }
 
@@ -507,7 +613,7 @@ final class SpeechInputService {
             onSpeechActivity?(true)
         case .speechEnded(let duration):
             onSpeechActivity?(false)
-            guard isRunning else { return }
+            guard isRunning, !pushToTalkActive else { return }
             // Wake-only sessions keep running: the wake phrase is matched on partial results as
             // they arrive, and cutting a session at the end of speech could drop a slow
             // recogniser's "…Jarvis". The watchdog recycles long sessions instead.
@@ -521,7 +627,7 @@ final class SpeechInputService {
         stabilityTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_800_000_000)
             guard !Task.isCancelled, let self else { return }
-            guard self.mode == .conversation, !self.finalizing, self.lastPartial == snapshot, !snapshot.isEmpty else { return }
+            guard self.mode == .conversation, !self.finalizing, !self.pushToTalkActive, self.lastPartial == snapshot, !snapshot.isEmpty else { return }
             self.finalize()
         }
     }
@@ -549,8 +655,13 @@ final class SpeechInputService {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 preferredLanguage = language
+                if pushToTalkActive { deliveredDuringPushToTalk = true }
                 onUtterance?(trimmed, language, confidence)
             }
+        }
+        if releasingPushToTalk {
+            releasingPushToTalk = false
+            pushToTalkActive = false
         }
         beginAll()
     }

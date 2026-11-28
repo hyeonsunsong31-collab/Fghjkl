@@ -64,6 +64,31 @@ final class JarvisController {
     var interruptedWorkflow: Workflow?
     var englishVoice = "bm_george"
 
+    // MARK: Input status (shown under the chat input)
+    /// A request (typed, spoken or tapped) is being carried out.
+    var busy = false
+    /// The text field has focus: speech not addressed to Jarvis is ignored meanwhile (the
+    /// microphone hears the keyboard).
+    var typing = false
+    var voiceState: SpeechInputService.State = .off
+    /// The last words the microphone delivered to Jarvis.
+    var lastHeard = ""
+    /// Why the last speech was set aside, or a microphone problem.
+    var voiceNote = ""
+    var pushToTalkActive = false
+    @ObservationIgnored private var lastTypingActivity = Date.distantPast
+    @ObservationIgnored private var lastUtteranceText = ""
+    @ObservationIgnored private var lastUtteranceTime = Date.distantPast
+    @ObservationIgnored private var queuedVoice: [(text: String, language: DetectedLanguage?, confidence: Double?)] = []
+    @ObservationIgnored private var turnToken = UUID()
+    @ObservationIgnored private var currentTurnModality: InputModality?
+    @ObservationIgnored private var lastLevelUpdate = Date.distantPast
+    @ObservationIgnored private var shownNotes: [String: Date] = [:]
+    @ObservationIgnored private var stallTimer: Timer?
+    @ObservationIgnored private var lastTick = CFAbsoluteTimeGetCurrent()
+    /// Longest main-thread stall seen (seconds), for diagnostics and the CI input test.
+    @ObservationIgnored private(set) var worstStall: Double = 0
+
     // MARK: Services
     @ObservationIgnored let brain: Brain
     @ObservationIgnored let records = RecordKeeper.shared
@@ -131,6 +156,11 @@ final class JarvisController {
             await deepThink.loadIfInstalled()
         }
         startLatticeLoop()
+        startStallMonitor()
+        // Automated tests of the real input paths: typing into the actual text field, and speech
+        // results fed through the same gate as the microphone's.
+        if let text = defaults.string(forKey: "JarvisTypeTest"), !text.isEmpty { runTypeTest(text) }
+        if let text = defaults.string(forKey: "JarvisVoiceTest"), !text.isEmpty { runVoiceTest(text) }
         // Scripted conversation for automated end-to-end tests, e.g.
         // `-JarvisScript "open the 3D space || make three red cubes || clone it twice"`.
         if let script = defaults.string(forKey: "JarvisScript"), !script.isEmpty { runScript(script) }
@@ -212,22 +242,25 @@ final class JarvisController {
         speechInput.onUtterance = { [weak self] text, language, confidence in
             guard let self else { return }
             self.partialTranscript = ""
-            // Ignore our own speech that leaked past the echo canceller.
-            if self.speech.isLikelyEcho(text) { return }
-            // While a song plays the microphone hears it too: only take speech meant for Jarvis.
-            let answersQuestion: Bool = self.pendingConfirmation != nil && ConfirmationReply.classify(text) != nil
-            if self.music.isPlaying && !answersQuestion && !JarvisController.isMeantForJarvis(text) {
-                Log.voice.info("Ignored speech while music plays")
-                return
-            }
-            self.submit(text, modality: .voice, language: language, confidence: confidence)
+            self.handleHeard(text, language: language, confidence: confidence)
+        }
+        speechInput.onState = { [weak self] state in
+            guard let self else { return }
+            self.voiceState = state
+            let name: String = String(describing: state)
+            Log.voice.info("Voice state: \(name, privacy: .public)")
+        }
+        speechInput.onNothingHeard = { [weak self] in
+            guard let self else { return }
+            let ko = self.currentLanguage == .korean
+            self.appendMessage(.assistant, ko ? "잘 듣지 못했습니다. 버튼을 누른 채로 다시 말씀해 주십시오." : "I didn't catch that, sir. Hold the button while you speak.", language: self.currentLanguage)
         }
         speechInput.onSpeechActivity = { [weak self] speaking in
             guard let self else { return }
             if speaking && self.speech.isSpeaking { self.possibleBargeIn = true }
         }
-        speechInput.onLevel = { [weak self] level in self?.inputLevel = level }
-        speechInput.onError = { [weak self] message in self?.statusNote = message }
+        speechInput.onLevel = { [weak self] level in self?.updateLevel(level) }
+        speechInput.onError = { [weak self] message in self?.reportVoiceProblem(message) }
 
         speech.onSpeakingChanged = { [weak self] speaking in
             guard let self else { return }
@@ -342,7 +375,7 @@ final class JarvisController {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 guard let self, self.isAwake else { return }
-                let limit = Double(self.records.setting("idleMinutes").flatMap(Double.init) ?? 5) * 60
+                let limit = Double(self.records.setting("idleMinutes").flatMap(Double.init) ?? 10) * 60
                 if Date().timeIntervalSince(self.lastInteraction) > limit && !self.speech.isSpeaking && self.currentTask == nil {
                     self.sleep()
                     return
@@ -354,14 +387,132 @@ final class JarvisController {
     // MARK: Input
 
     func submit(_ text: String, modality: InputModality, language: DetectedLanguage? = nil, confidence: Double? = nil) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
         lastInteraction = Date()
         pendingLink = nil
         if !isAwake && modality != .voice { wake(source: modality, speak: false) }
-        cancelCurrentTurn()
-        currentTask = Task { [weak self] in
-            await self?.orchestrator.handle(text, modality: modality, languageHint: language, confidence: confidence)
-            self?.currentTask = nil
+        // Speech never cancels a typed or tapped request that is still being carried out (the
+        // microphone hears keyboard clicks and Jarvis itself); it waits its turn. "Stop" interrupts.
+        if modality == .voice, currentTask != nil, let running = currentTurnModality, running != .voice, !VoiceGate.isStopCommand(clean) {
+            queuedVoice.append((clean, language, confidence))
+            Log.voice.info("Voice input queued behind a typed request")
+            return
         }
+        cancelCurrentTurn()
+        // Show the request at once: input visibly works even while it is being carried out.
+        let shown: DetectedLanguage
+        switch languageMode {
+        case .korean: shown = .korean
+        case .english: shown = .english
+        case .auto: shown = language ?? detectLanguage(clean)
+        }
+        appendMessage(.user, clean, language: shown)
+        let token = UUID()
+        turnToken = token
+        currentTurnModality = modality
+        busy = true
+        let started = Date()
+        currentTask = Task { [weak self] in
+            await self?.orchestrator.handle(clean, modality: modality, languageHint: language, confidence: confidence, alreadyShown: true)
+            guard let self, self.turnToken == token else { return }
+            self.currentTask = nil
+            self.currentTurnModality = nil
+            self.busy = false
+            let secs = String(format: "%.2f", Date().timeIntervalSince(started))
+            let source: String = modality.rawValue
+            Log.agent.info("Input handled (\(source, privacy: .public)) in \(secs, privacy: .public)s")
+            if !self.queuedVoice.isEmpty {
+                let next = self.queuedVoice.removeFirst()
+                self.submit(next.text, modality: .voice, language: next.language, confidence: next.confidence)
+            }
+        }
+    }
+
+    /// Speech from the microphone: through the voice gate, then like any other input.
+    private func handleHeard(_ text: String, language: DetectedLanguage, confidence: Double) {
+        let context = voiceContext()
+        if case .drop(let reason) = VoiceGate.utterance(text, confidence: confidence, context: context) {
+            Log.voice.info("Voice gate: dropped (\(reason, privacy: .public))")
+            voiceNote = reason
+            return
+        }
+        // While a song plays the microphone hears it too: only take speech meant for Jarvis.
+        let answersQuestion: Bool = pendingConfirmation != nil && ConfirmationReply.classify(text) != nil
+        if music.isPlaying && !answersQuestion && !context.pushToTalk && !JarvisController.isMeantForJarvis(text) {
+            Log.voice.info("Voice gate: dropped (music)")
+            voiceNote = "music"
+            return
+        }
+        lastUtteranceText = text
+        lastUtteranceTime = Date()
+        lastHeard = text
+        voiceNote = ""
+        Log.voice.info("Voice gate: accepted")
+        submit(text, modality: .voice, language: language, confidence: confidence)
+    }
+
+    private func voiceContext() -> VoiceGate.Context {
+        var c = VoiceGate.Context()
+        c.jarvisSpeaking = speech.isSpeaking
+        c.secondsSinceSpeechEnded = speech.secondsSinceSpeechEnded
+        c.spokenRecently = speech.recentSpokenText(within: 8)
+        c.typing = typing || Date().timeIntervalSince(lastTypingActivity) < 3
+        c.pushToTalk = speechInput.pushToTalkActive
+        c.secondsSinceLastUtterance = Date().timeIntervalSince(lastUtteranceTime)
+        c.lastUtterance = lastUtteranceText
+        return c
+    }
+
+    /// The text field gained or lost focus.
+    func setTyping(_ on: Bool) {
+        typing = on
+        lastTypingActivity = Date()
+    }
+
+    /// A key was typed.
+    func noteTyping() { lastTypingActivity = Date() }
+
+    /// Hold-to-talk: listen while the button is held, then carry out what was said.
+    func pushToTalk(_ down: Bool) {
+        if down {
+            guard !pushToTalkActive else { return }
+            pushToTalkActive = true
+            speech.stop()
+            voiceNote = ""
+            if micMuted { setMicMuted(false) }
+            if !isAwake { wake(source: .button, speak: false) }
+            speechInput.mode = .conversation
+            speechInput.beginPushToTalk()
+        } else {
+            guard pushToTalkActive else { return }
+            pushToTalkActive = false
+            speechInput.endPushToTalk()
+        }
+    }
+
+    /// Mic level for the HUD, at most ~10 updates a second (each one redraws views).
+    private func updateLevel(_ level: Float) {
+        let now = Date()
+        let change: Float = abs(level - inputLevel)
+        guard change > 0.02, now.timeIntervalSince(lastLevelUpdate) > 0.1 || change > 0.3 else { return }
+        lastLevelUpdate = now
+        inputLevel = level
+    }
+
+    /// A microphone or recognition problem: say so in the conversation (not only in a log), with a
+    /// way to fix it.
+    private func reportVoiceProblem(_ message: String) {
+        statusNote = message
+        voiceNote = message
+        let now = Date()
+        if let last = shownNotes[message], now.timeIntervalSince(last) < 120 { return }
+        shownNotes[message] = now
+        Log.voice.error("Voice problem shown to the user")
+        if voiceState == .denied, let url = URL(string: UIApplication.openSettingsURLString) {
+            offerLink(url, title: currentLanguage == .korean ? "설정 열기" : "Open Settings")
+        }
+        appendMessage(.assistant, "⚠︎ " + message, language: currentLanguage)
     }
 
     func choose(_ option: SuggestedOption) {
@@ -381,18 +532,34 @@ final class JarvisController {
         speech.stop()
         currentTask?.cancel()
         currentTask = nil
+        currentTurnModality = nil
+        turnToken = UUID()
+        busy = false
     }
 
     private func checkBargeIn(partial: String) {
-        guard possibleBargeIn, speech.isSpeaking else { return }
-        let words = partial.split(separator: " ").count
-        let hangul = partial.unicodeScalars.filter { Hangul.isSyllable($0) }.count
-        guard words >= 2 || hangul >= 3 else { return }
-        // Reject our own echo that slipped past the echo canceller.
-        if speech.isLikelyEcho(partial) { return }
+        guard speech.isSpeaking else { return }
+        // Only a real interruption ("stop", "Jarvis", a clearly different sentence) cuts Jarvis
+        // off; its own voice coming back through the microphone does not.
+        guard speechInput.pushToTalkActive || (possibleBargeIn && VoiceGate.bargeIn(partial: partial, context: voiceContext())) else { return }
         possibleBargeIn = false
+        Log.voice.info("Barge-in: stopped speaking")
         cancelCurrentTurn()
         phase = .listening
+    }
+
+    /// Tapping the core: wake up, or (already awake) listen afresh. It never puts Jarvis to sleep —
+    /// that used to silence the microphone for anyone tapping the ▷ core to talk.
+    func coreTapped() {
+        if !isAwake {
+            wake(source: .button)
+            return
+        }
+        lastInteraction = Date()
+        speech.stop()
+        if micMuted { setMicMuted(false) } else { speechInput.ensureListening(restart: true) }
+        voiceNote = ""
+        Log.voice.info("Core tapped: listening afresh")
     }
 
     // MARK: Toggles
@@ -506,6 +673,118 @@ final class JarvisController {
                 scene.reticle = nil
                 scene.endDrag()
             }
+        }
+    }
+
+    // MARK: Diagnostics
+
+    /// Logs whenever the main thread (UI, keyboard, speech callbacks) is blocked for long.
+    private func startStallMonitor() {
+        stallTimer?.invalidate()
+        lastTick = CFAbsoluteTimeGetCurrent()
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stallTick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        stallTimer = timer
+    }
+
+    private func stallTick() {
+        let now = CFAbsoluteTimeGetCurrent()
+        let late = now - lastTick - 0.25
+        lastTick = now
+        if late > worstStall { worstStall = late }
+        if late > 0.6 {
+            let secs = String(format: "%.2f", late)
+            let p: String = phase.rawValue
+            Log.agent.error("Main thread stalled for \(secs, privacy: .public)s (phase \(p, privacy: .public))")
+            CrashLog.breadcrumb("main thread stalled \(secs)s")
+        }
+    }
+
+    /// CI: type into the real text field through UIKit (focus, keystrokes, Return) and report each step.
+    private func runTypeTest(_ text: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard let self else { return }
+            guard let field = Self.findTextField() else {
+                Log.agent.error("Type test: field=false")
+                return
+            }
+            let window = field.window
+            let center: CGPoint = field.convert(CGPoint(x: field.bounds.midX, y: field.bounds.midY), to: window)
+            let hit: UIView? = window?.hitTest(center, with: nil)
+            let tappable: Bool = hit.map { $0 === field || $0.isDescendant(of: field) } ?? false
+            self.worstStall = 0   // count stalls while interacting, not during launch
+            let focused: Bool = field.becomeFirstResponder()
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            field.insertText(text)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            let typed: Bool = (field.text ?? "") == text
+            _ = field.delegate?.textFieldShouldReturn?(field)
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            var submitted: Bool = self.messages.contains { $0.role == .user && $0.text == text }
+            var method = "return key"
+            if !submitted {
+                field.sendActions(for: .editingDidEndOnExit)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                submitted = self.messages.contains { $0.role == .user && $0.text == text }
+                method = "end-on-exit"
+            }
+            let key: Bool = window?.isKeyWindow ?? false
+            let hitName: String = hit.map { String(describing: type(of: $0)) } ?? "nil"
+            Log.agent.info("Type test: field=true tappable=\(tappable, privacy: .public) hit=\(hitName, privacy: .public) keyWindow=\(key, privacy: .public) focused=\(focused, privacy: .public) typed=\(typed, privacy: .public) submitted=\(submitted, privacy: .public) via=\(method, privacy: .public)")
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            let worst = String(format: "%.2f", self.worstStall)
+            Log.agent.info("Main thread: worst stall \(worst, privacy: .public)s")
+        }
+    }
+
+    static func findTextField() -> UITextField? {
+        func search(_ view: UIView) -> UITextField? {
+            if let f = view as? UITextField, !f.isHidden, f.isUserInteractionEnabled { return f }
+            for sub in view.subviews { if let f = search(sub) { return f } }
+            return nil
+        }
+        for scene in UIApplication.shared.connectedScenes {
+            guard let ws = scene as? UIWindowScene else { continue }
+            for window in ws.windows where !(window is PassthroughWindow) {
+                if let f = search(window) { return f }
+            }
+        }
+        return nil
+    }
+
+    /// CI: feed recognised speech through the same gate as the microphone: a command, Jarvis' own
+    /// echo, and a command addressed by name while asleep.
+    private func runVoiceTest(_ text: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 16_000_000_000)
+            guard let self else { return }
+            if !self.isAwake { self.wake(source: .button, speak: false) }
+            self.speechInput.mode = .conversation
+            self.speechInput.simulateHeard(text, language: .english)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            let heard: Bool = self.messages.contains { $0.role == .user && $0.text == text }
+            Log.agent.info("Voice test: command delivered=\(heard, privacy: .public)")
+            // Jarvis' own words coming back through the microphone must be ignored.
+            let echo = "I have finished the task you asked for, sir."
+            self.speech.speak(echo, language: .english)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let before = self.messages.count
+            self.speechInput.simulateHeard(echo, language: .english)
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let echoIgnored: Bool = !self.messages.dropFirst(before).contains { $0.role == .user }
+            Log.agent.info("Voice test: echo ignored=\(echoIgnored, privacy: .public)")
+            self.speech.stop()
+            // Asleep, "Jarvis, …" still works.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            self.sleep()
+            let named = "Jarvis open the 3D space"
+            self.speechInput.simulateHeard(named, language: .english)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            let woke: Bool = self.isAwake && self.spaceOpen
+            Log.agent.info("Voice test: named command while asleep=\(woke, privacy: .public)")
         }
     }
 

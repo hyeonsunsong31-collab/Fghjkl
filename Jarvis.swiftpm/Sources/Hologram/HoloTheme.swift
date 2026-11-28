@@ -136,8 +136,10 @@ struct HoloButton: View {
 
 /// Animated scanlines + subtle flicker overlay.
 struct Scanlines: View {
+    var paused = false
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { (context: TimelineViewDefaultContext) in
+        TimelineView(.animation(minimumInterval: 1.0 / 15.0, paused: paused)) { (context: TimelineViewDefaultContext) in
             ScanlinesCanvas(time: context.date.timeIntervalSinceReferenceDate)
         }
         .allowsHitTesting(false)
@@ -176,8 +178,10 @@ private struct ScanlinesCanvas: View {
 
 /// Animated hexagonal grid backdrop (used when the 3D space is closed).
 struct HexBackdrop: View {
+    var paused = false
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 20)) { (context: TimelineViewDefaultContext) in
+        TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: paused)) { (context: TimelineViewDefaultContext) in
             HexBackdropCanvas(time: CGFloat(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 100_000)))
         }
         .ignoresSafeArea()
