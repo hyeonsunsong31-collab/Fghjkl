@@ -329,6 +329,25 @@ jobs:
             echo "::warning::speech recognition is not authorised in this simulator; the real-recognition test was skipped"
           fi
           t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
+
+          phase "2f studio"
+          # 2f) The studio end to end, driven like a user: a typed request builds a game, WebKit runs its
+          #     self-test, the local link serves it over HTTP, a stacked adjustment ("make the snake faster
+          #     and add a timer") rebuilds it, and it is exported as a Windows program.
+          xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
+            --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log-studio.txt 2>&1 &
+          LOGPID=$!
+          t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES -JarvisResetScene YES \
+            -JarvisStudioTest "make a snake game with a blue snake"
+          sleep 60
+          shot ../screenshot-studio.png
+          kill $LOGPID || true
+          echo "---- app log (studio) ----"; grep -E "Studio|Turn|Input handled" ../app-log-studio.txt | tail -30 || true
+          for EXPECT in "Studio test: status=done" "panel=true" "served=true" "Studio test: adjustment status=done" "applied=true" "windowsProgram=true"; do
+            if grep -q "$EXPECT" ../app-log-studio.txt; then echo "$EXPECT ✅"; else echo "MISSING: $EXPECT ❌"; exit 1; fi
+          done
+          echo "THE STUDIO BUILDS, CHECKS, SERVES, ADJUSTS AND EXPORTS ✅"
+          t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
           phase "3 Begin button"
           # 3) The onboarding "Begin" button: wake with spoken reply and microphone capture,
           #    forcing the direct-synthesizer fallback that used to crash on devices.
@@ -378,6 +397,7 @@ jobs:
             screenshot-designs.png
             screenshot-input.png
             screenshot-audio.png
+            screenshot-studio.png
             app-log.txt
             app-log-begin.txt
             app-log-music.txt
@@ -385,3 +405,4 @@ jobs:
             app-log-design.txt
             app-log-input.txt
             app-log-audio.txt
+            app-log-studio.txt

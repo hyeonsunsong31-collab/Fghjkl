@@ -64,7 +64,7 @@ struct RootView: View {
                 // Side panels.
                 if let panel = jarvis.activePanel {
                     panelView(panel)
-                        .frame(maxWidth: panel == .onboarding ? 560 : (wide ? min(640, geo.size.width * 0.55) : .infinity),
+                        .frame(maxWidth: panelWidth(panel, wide: wide, width: geo.size.width),
                                maxHeight: panel == .onboarding ? 620 : geo.size.height * 0.82)
                         .padding(wide ? 24 : 10)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: panel == .onboarding ? .center : .leading)
@@ -114,6 +114,14 @@ struct RootView: View {
         }
     }
 
+    private func panelWidth(_ panel: Panel, wide: Bool, width: CGFloat) -> CGFloat {
+        if panel == .onboarding { return 560 }
+        if !wide { return .infinity }
+        let share: CGFloat = panel == .studio ? 0.7 : 0.55
+        let cap: CGFloat = panel == .studio ? 900 : 640
+        return min(cap, width * share)
+    }
+
     @ViewBuilder
     private func panelView(_ panel: Panel) -> some View {
         switch panel {
@@ -123,6 +131,7 @@ struct RootView: View {
         case .browser: BrowserPanel()
         case .help: HelpPanel()
         case .onboarding: OnboardingPanel()
+        case .studio: StudioPanel()
         }
     }
 

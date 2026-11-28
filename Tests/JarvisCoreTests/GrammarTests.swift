@@ -105,6 +105,24 @@ final class GrammarTests: XCTestCase {
         assertIntent("reset the view", .resetCamera)
     }
 
+    func testStudio() {
+        assertIntent("open the studio", .openStudio)
+        assertIntent("show me the terminal", .openStudio)
+        assertIntent("스튜디오 열어줘", .openStudio)
+        assertIntent("make a snake game with a blue snake", .buildProgram)
+        assertIntent("build me a website for my bakery", .buildProgram)
+        assertIntent("뱀 게임 만들어줘", .buildProgram)
+        assertIntent("벽돌깨기 게임 만들어줘", .buildProgram)
+        assertIntent("create a space shooter", .buildProgram)
+        XCTAssertEqual(g.parse("make a snake game").commands.first?.parameters["request"], "make a snake game")
+        // 3D commands stay 3D.
+        assertIntent("make a red cube", .createObject)
+        assertIntent("빨간 큐브 만들어줘", .createObject)
+        assertIntent("open the 3D space", .open3D)
+        assertIntent("make a castle with 6 towers", .generateModel)
+        assertIntent("design a two story house with a blue roof", .generateModel)
+    }
+
     func testCompoundCommands() {
         let r = g.parse("open the 3D space and make a red cube then clone it twice")
         XCTAssertEqual(r.commands.map(\.intent), [.open3D, .createObject, .cloneObject])

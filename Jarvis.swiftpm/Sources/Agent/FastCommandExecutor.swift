@@ -195,6 +195,13 @@ final class FastCommandExecutor {
         case .nextTrack:
             let (ok, detail) = await c.music.next()
             return CommandOutcome(success: ok, detail: ok ? "" : detail)
+        case .openStudio:
+            c.showPanel(.studio)
+            return CommandOutcome(success: true)
+        case .buildProgram:
+            c.showPanel(.studio)
+            StudioController.shared.request(p["request"] ?? command.text, korean: ko)
+            return CommandOutcome(success: true)
         case .openBrowser:
             c.showPanel(.browser)
             if c.web.currentURL == nil, let home = URL(string: "https://duckduckgo.com") { await c.web.load(home) }

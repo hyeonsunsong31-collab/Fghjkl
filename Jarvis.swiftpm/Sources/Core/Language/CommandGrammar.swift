@@ -18,6 +18,8 @@ enum CommandIntent: String, Codable, CaseIterable {
     case openApp, flashlightOn, flashlightOff, setBrightness, setVolume
     case batteryStatus, timeQuery, dateQuery, setTimer, setAlarm
     case runShortcut, systemSetting, call, message
+    // Development studio
+    case openStudio, buildProgram
 
     /// Coarse class used to teach the cortex.
     var intentClass: IntentClass {
@@ -37,6 +39,8 @@ enum CommandIntent: String, Codable, CaseIterable {
              .runShortcut, .systemSetting, .call, .message:
             return .deviceControl
         case .timeQuery, .dateQuery: return .question
+        case .openStudio: return .systemControl
+        case .buildProgram: return .creative
         }
     }
 
@@ -344,6 +348,26 @@ struct CommandGrammar {
                     "심층 사고", "심층사고", "깊게 생각", "딥씽크", "딥 씽크", "깊이 생각"]
         if c.has(deep) {
             if c.has(off) && !c.has(["think harder"]) { consider(.deepThinkOff, 0.92) } else { consider(.deepThinkOn, 0.92) }
+        }
+
+        // --- Development studio ----------------------------------------------------
+        let studioWords = ["studio", "coding studio", "dev studio", "terminal", "vibe coding", "coding workspace", "workspace slots",
+                           "스튜디오", "터미널", "코딩 스튜디오", "바이브 코딩", "개발 환경", "코딩 환경", "작업 공간 목록"]
+        if c.has(studioWords) && !c.has(close) && (c.has(open) || c.tokens.count <= 3) {
+            consider(.openStudio, 0.95)
+        }
+        // "make a snake game", "build me a website for my bakery", "뱀 게임 만들어줘": a program for the studio.
+        let programNouns = ["game", "games", "app", "application", "website", "web site", "web page", "webpage", "web app", "homepage",
+                            "landing page", "program", "chatbot", "chat bot", "script",
+                            "게임", "앱", "어플", "애플리케이션", "웹사이트", "홈페이지", "웹페이지", "웹 페이지", "프로그램", "챗봇", "스크립트"]
+        // Well-known game names count without the word "game" ("make a breakout clone"); app names such
+        // as timer, notes or calculator do not ("make a 5 minute timer" is a timer, not an app).
+        let gameNames = ["breakout", "brick breaker", "pong", "flappy", "space invaders", "invaders", "shmup", "galaga", "platformer",
+                         "side scroller", "endless runner", "dino game", "tetris", "minesweeper", "2048", "tic tac toe", "tictactoe",
+                         "gomoku", "whack a mole", "space shooter",
+                         "벽돌깨기", "테트리스", "지뢰찾기", "틱택토", "오목", "두더지 잡기", "플랫포머", "슈팅 게임", "무한 달리기"]
+        if c.has(create) && (c.has(programNouns) || c.has(gameNames)) && !c.has(space3D.filter { $0 != "3d" && $0 != "3디" }) {
+            consider(.buildProgram, 0.96, ["request": c.original])
         }
 
         // --- 3D space -----------------------------------------------------------

@@ -10,7 +10,7 @@ enum AssistantPhase: String {
 }
 
 enum Panel: String, Identifiable {
-    case history, brain, settings, browser, help, onboarding
+    case history, brain, settings, browser, help, onboarding, studio
     var id: String { rawValue }
 }
 
@@ -125,6 +125,7 @@ final class JarvisController {
         restoreSettings()
         ToolRegistry.shared.controller = self
         wireServices()
+        wireStudio()
         if let checkpoint = records.latestUnfinishedCheckpoint() {
             var wf = checkpoint.workflow
             wf.markInterrupted()
@@ -165,6 +166,7 @@ final class JarvisController {
         if let text = defaults.string(forKey: "JarvisTypeTest"), !text.isEmpty { runTypeTest(text) }
         if let text = defaults.string(forKey: "JarvisVoiceTest"), !text.isEmpty { runVoiceTest(text) }
         if let text = defaults.string(forKey: "JarvisAudioTest"), !text.isEmpty { runAudioTest(text) }
+        if let text = defaults.string(forKey: "JarvisStudioTest"), !text.isEmpty { runStudioTest(text) }
         // Scripted conversation for automated end-to-end tests, e.g.
         // `-JarvisScript "open the 3D space || make three red cubes || clone it twice"`.
         if let script = defaults.string(forKey: "JarvisScript"), !script.isEmpty { runScript(script) }
@@ -212,6 +214,25 @@ final class JarvisController {
                     ticks += 1
                 }
                 try? await Task.sleep(nanoseconds: 800_000_000)
+            }
+        }
+    }
+
+    /// Studio results reach the conversation like any other reply: what was made, the link for
+    /// web products, the problems found if any.
+    private func wireStudio() {
+        StudioController.shared.onFinished = { [weak self] request, outcome, link in
+            guard let self else { return }
+            let language: DetectedLanguage = request.korean ? .korean : .english
+            var text = outcome.summary
+            let problems = outcome.checks.filter { $0.hasPrefix("✗") }
+            if !problems.isEmpty { text += "\n" + problems.prefix(3).joined(separator: "\n") }
+            self.appendMessage(.assistant, text, language: language)
+            self.records.logMessage(role: "assistant", text: text, language: language, runID: nil)
+            if let link { self.offerLink(link, title: request.korean ? "결과물 열기" : "Open the result") }
+            if outcome.ok {
+                let spoken = request.korean ? "완성했습니다. 스튜디오에서 바로 확인하실 수 있습니다." : "It's ready, sir. You can try it in the studio now."
+                self.speech.speak(spoken, language: language)
             }
         }
     }
@@ -851,6 +872,52 @@ final class JarvisController {
             let delivered: Bool = heard.lowercased().contains(key)
             Log.agent.info("Audio test: recognised '\(heard, privacy: .public)' delivered=\(delivered, privacy: .public)")
         }
+    }
+
+    /// CI: the studio end to end, driven like a user — a typed request builds a product that is
+    /// checked in WebKit and served on the local link; a stacked adjustment rebuilds it; it is
+    /// exported as a Windows program.
+    private func runStudioTest(_ text: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard let self else { return }
+            let studio = StudioController.shared
+            let ws = studio.newWorkspace("CI \(Int(Date().timeIntervalSince1970) % 100000)")
+            self.submit(text, modality: .text)
+            let first = await Self.waitForRequest(studio, ws.id, index: 0)
+            let link: URL? = studio.shareLink
+            var served = false
+            if let link, let (data, response) = try? await URLSession.shared.data(from: link) {
+                let code: Int = (response as? HTTPURLResponse)?.statusCode ?? 0
+                served = code == 200 && String(decoding: data, as: UTF8.self).lowercased().contains("<html")
+            }
+            let status1: String = first?.status.rawValue ?? "none"
+            let linkText: String = link?.absoluteString ?? "none"
+            let panelOpen: Bool = self.activePanel == .studio
+            Log.agent.info("Studio test: status=\(status1, privacy: .public) version=\(first?.version ?? 0, privacy: .public) panel=\(panelOpen, privacy: .public) served=\(served, privacy: .public) link=\(linkText, privacy: .public)")
+            Log.agent.info("Studio test: checks \((first?.checks ?? []).joined(separator: " | "), privacy: .public)")
+            // A stacked adjustment, said the way a user would while the studio is open.
+            self.submit("make the snake faster and add a timer", modality: .text)
+            let second = await Self.waitForRequest(studio, ws.id, index: 1)
+            let status2: String = second?.status.rawValue ?? "none"
+            let config: String = (try? studio.store.files(ws.id).readText("/config.js")) ?? ""
+            let adjusted: Bool = config.contains("\"timer\": true") && config.contains("\"speed\": 1.")
+            Log.agent.info("Studio test: adjustment status=\(status2, privacy: .public) version=\(second?.version ?? 0, privacy: .public) applied=\(adjusted, privacy: .public)")
+            await studio.deliver(as: "exe")
+            let exeBytes: Int = studio.delivery.flatMap { try? Data(contentsOf: $0.url).count } ?? 0
+            let starts: Bool = studio.delivery.flatMap { try? Data(contentsOf: $0.url).prefix(2) } == Data("MZ".utf8)
+            Log.agent.info("Studio test: exe=\(studio.delivery?.title ?? "none", privacy: .public) bytes=\(exeBytes, privacy: .public) windowsProgram=\(starts, privacy: .public)")
+        }
+    }
+
+    private static func waitForRequest(_ studio: StudioController, _ id: String, index: Int) async -> WorkRequest? {
+        for _ in 0..<600 {
+            let requests: [WorkRequest] = studio.store.workspace(id)?.requests ?? []
+            if requests.count > index, requests[index].status == .done || requests[index].status == .failed { return requests[index] }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let requests: [WorkRequest] = studio.store.workspace(id)?.requests ?? []
+        return requests.count > index ? requests[index] : nil
     }
 
     // MARK: Models

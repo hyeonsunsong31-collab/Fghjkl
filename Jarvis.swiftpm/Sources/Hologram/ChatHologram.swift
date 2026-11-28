@@ -49,6 +49,9 @@ struct ChatHologram: View {
             HoloIconToggle(icon: "cube.transparent", active: jarvis.spaceOpen, tint: Holo.amber, label: "3D") {
                 jarvis.setSpaceOpen(!jarvis.spaceOpen)
             }
+            HoloIconToggle(icon: "hammer.fill", active: jarvis.activePanel == .studio, tint: Holo.green, label: "STUDIO") {
+                jarvis.showPanel(jarvis.activePanel == .studio ? nil : .studio)
+            }
         }
     }
 

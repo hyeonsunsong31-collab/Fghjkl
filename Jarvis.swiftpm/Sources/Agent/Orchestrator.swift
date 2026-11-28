@@ -91,6 +91,15 @@ final class Orchestrator {
 
         // Deterministic grammar + neural decision.
         let parsed = grammar.parse(text)
+
+        // With the studio open, edits are work for the studio's queue ("make the snake faster",
+        // "add a timer", "배경을 검게 바꿔"); assistant commands, music, apps and questions are not.
+        if c.activePanel == .studio, StudioController.shared.active?.product != nil, StudioRouting.isStudioWork(text, parsed: parsed) {
+            StudioController.shared.request(text, korean: language == .korean)
+            let reply = language == .korean ? "스튜디오 작업 대기열에 추가했습니다. 적용되면 알려 드리겠습니다." : "Added to the studio's queue, sir. I'll tell you when it's done."
+            finish(reply: reply, language: language, runID: nil)
+            return
+        }
         let channels = ContextBuilder.channels(for: c, language: language)
         let input = BrainInput(text: text, language: language, isVoice: modality == .voice,
                                grammarConfidence: parsed.confidence,
@@ -404,6 +413,7 @@ final class Orchestrator {
     }
 
     // MARK: Helpers
+
 
     static func claimsAction(_ reply: String) -> Bool {
         let l = reply.lowercased()

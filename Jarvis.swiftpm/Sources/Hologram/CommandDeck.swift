@@ -62,6 +62,7 @@ struct CommandDeck: View {
             Item(icon: "music.note", en: "MUSIC", ko: "음악", active: j.music.isPlaying, action: say("play some music", "음악 틀어줘")),
             Item(icon: "pause.fill", en: "PAUSE", ko: "일시정지", action: say("pause", "일시정지")),
             Item(icon: "forward.fill", en: "NEXT", ko: "다음 곡", action: say("next song", "다음 곡")),
+            Item(icon: "hammer.fill", en: "STUDIO", ko: "스튜디오", active: j.activePanel == .studio, action: { j.showPanel(j.activePanel == .studio ? nil : .studio) }),
             Item(icon: "globe", en: "BROWSER", ko: "브라우저", active: j.activePanel == .browser, action: { j.showPanel(j.activePanel == .browser ? nil : .browser) }),
             Item(icon: "clock.arrow.circlepath", en: "HISTORY", ko: "기록", active: j.activePanel == .history, action: { j.showPanel(j.activePanel == .history ? nil : .history) }),
             Item(icon: "brain.head.profile", en: "NEURAL", ko: "신경망", active: j.activePanel == .brain, action: { j.showPanel(j.activePanel == .brain ? nil : .brain) }),
