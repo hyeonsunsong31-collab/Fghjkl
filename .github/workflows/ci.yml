@@ -211,6 +211,17 @@ jobs:
           t 60 xcrun simctl privacy "$DEVICE" grant microphone "$BUNDLE" || true
           t 60 xcrun simctl privacy "$DEVICE" grant camera "$BUNDLE" || true
           t 60 xcrun simctl privacy "$DEVICE" grant photos "$BUNDLE" || true
+          # Speech recognition has no `simctl privacy` switch: grant it in the simulator's TCC
+          # database, so phase 2e can run the real recognisers.
+          TCC="$HOME/Library/Developer/CoreSimulator/Devices/$DEVICE/data/Library/TCC/TCC.db"
+          if [ -f "$TCC" ]; then
+            sqlite3 "$TCC" ".schema access" | head -3 || true
+            sqlite3 "$TCC" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceSpeechRecognition', '$BUNDLE', 0, 2, 2, 1, 0);" \
+              && echo "speech recognition granted in TCC" || echo "::warning::could not grant speech recognition"
+            sqlite3 "$TCC" "SELECT service, client, auth_value FROM access WHERE client = '$BUNDLE';" || true
+          else
+            echo "::warning::no simulator TCC database at $TCC"
+          fi
           phase "1 onboarding"
           # 1) First launch exactly as a user sees it (onboarding). The first (cold) launch on a
           #    freshly booted simulator can take a few minutes on CI runners.
@@ -294,6 +305,30 @@ jobs:
           if [ "$(grep -c 'intents=createObject success=true' ../app-log-input.txt)" -lt 2 ]; then echo "TYPED AND SPOKEN COMMANDS DID NOT BOTH RUN ❌"; exit 1; fi
           echo "TYPING AND SPEAKING BOTH REACH JARVIS ✅"
           t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
+
+          phase "2e real speech recognition"
+          # 2e) The actual recognisers: a sentence spoken by the system voice is fed in place of the
+          #     microphone (CI has none) and must come out as a command that runs: recognition,
+          #     endpointing, language choice, the voice gate and the turn, as on a device.
+          xcrun simctl spawn "$DEVICE" log stream --level info --style compact \
+            --predicate 'subsystem == "com.jarvis.local.assistant"' > ../app-log-audio.txt 2>&1 &
+          LOGPID=$!
+          t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES -JarvisResetScene YES \
+            -JarvisAudioTest "make a yellow sphere"
+          sleep 40
+          shot ../screenshot-audio.png
+          kill $LOGPID || true
+          echo "---- app log (real recognition) ----"; grep -E "Audio test|Speech|speech|Voice gate|Turn|Input handled" ../app-log-audio.txt | tail -40 || true
+          if grep -q "Audio test: speech permission 3" ../app-log-audio.txt; then
+            if grep -q "Audio test: recognised .* delivered=true" ../app-log-audio.txt && grep -q "Input handled (voice)" ../app-log-audio.txt; then
+              echo "REAL SPEECH RECOGNITION REACHES JARVIS ✅"
+            else
+              echo "SPOKEN AUDIO DID NOT BECOME A COMMAND ❌"; exit 1
+            fi
+          else
+            echo "::warning::speech recognition is not authorised in this simulator; the real-recognition test was skipped"
+          fi
+          t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
           phase "3 Begin button"
           # 3) The onboarding "Begin" button: wake with spoken reply and microphone capture,
           #    forcing the direct-synthesizer fallback that used to crash on devices.
@@ -342,9 +377,11 @@ jobs:
             screenshot-design-car.png
             screenshot-designs.png
             screenshot-input.png
+            screenshot-audio.png
             app-log.txt
             app-log-begin.txt
             app-log-music.txt
             app-log-emergency.txt
             app-log-design.txt
             app-log-input.txt
+            app-log-audio.txt

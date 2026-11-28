@@ -164,6 +164,7 @@ final class JarvisController {
         // results fed through the same gate as the microphone's.
         if let text = defaults.string(forKey: "JarvisTypeTest"), !text.isEmpty { runTypeTest(text) }
         if let text = defaults.string(forKey: "JarvisVoiceTest"), !text.isEmpty { runVoiceTest(text) }
+        if let text = defaults.string(forKey: "JarvisAudioTest"), !text.isEmpty { runAudioTest(text) }
         // Scripted conversation for automated end-to-end tests, e.g.
         // `-JarvisScript "open the 3D space || make three red cubes || clone it twice"`.
         if let script = defaults.string(forKey: "JarvisScript"), !script.isEmpty { runScript(script) }
@@ -819,6 +820,36 @@ final class JarvisController {
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             let woke: Bool = self.isAwake && self.spaceOpen
             Log.agent.info("Voice test: named command while asleep=\(woke, privacy: .public)")
+        }
+    }
+
+    /// CI: real speech recognition. A sentence spoken by the system voice is fed to the
+    /// recognisers in place of the microphone; it must come out as a command that runs.
+    private func runAudioTest(_ text: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard let self else { return }
+            if !self.isAwake { self.wake(source: .button, speak: false) }
+            self.speechInput.mode = .conversation
+            guard self.speechInput.startFeedOnly() else {
+                Log.agent.info("Audio test: recognition not authorised here")
+                return
+            }
+            let clip = await AudioTestSupport.microphoneLikeClip(text, language: .english)
+            let secs = String(format: "%.1f", clip.speechSeconds)
+            Log.agent.info("Audio test: rendered \(secs, privacy: .public)s of speech in \(clip.buffers.count, privacy: .public) buffers")
+            try? await Task.sleep(nanoseconds: 1_000_000_000)   // let the recognisers start
+            let before = self.messages.count
+            await self.speechInput.feedTestAudio(clip.buffers)
+            var waited = 0
+            while waited < 120 && !self.messages.dropFirst(before).contains(where: { $0.role == .user }) {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            let heard: String = self.messages.dropFirst(before).first(where: { $0.role == .user })?.text ?? ""
+            let key: String = text.split(separator: " ").last.map { String($0).lowercased() } ?? text
+            let delivered: Bool = heard.lowercased().contains(key)
+            Log.agent.info("Audio test: recognised '\(heard, privacy: .public)' delivered=\(delivered, privacy: .public)")
         }
     }
 

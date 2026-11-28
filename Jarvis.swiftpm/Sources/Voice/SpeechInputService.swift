@@ -551,6 +551,32 @@ final class SpeechInputService {
         }
     }
 
+    /// CI: listen to audio given to `feedTestAudio` instead of the microphone (the CI machine
+    /// has none) — the real recognisers, endpointing, language choice and delivery. False when
+    /// speech recognition is not authorised here.
+    func startFeedOnly() -> Bool {
+        let status = SFSpeechRecognizer.authorizationStatus()
+        let raw: Int = status.rawValue
+        let available: String = recognizers.map { "\($0.key.rawValue)=\($0.value.isAvailable)" }.sorted().joined(separator: " ")
+        Log.voice.info("Audio test: speech permission \(raw, privacy: .public), recognisers \(available, privacy: .public)")
+        guard status == .authorized else { return false }
+        wantsRunning = true
+        isRunning = true
+        state = .listening
+        router.resetHealth()
+        beginAll()
+        return true
+    }
+
+    /// CI: feed audio as if the microphone had heard it, at real-time pace.
+    func feedTestAudio(_ buffers: [AVAudioPCMBuffer]) async {
+        for buffer in buffers {
+            router.handle(buffer)
+            let seconds: Double = Double(buffer.frameLength) / max(1, buffer.format.sampleRate)
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        }
+    }
+
     /// A session ended on its own: restart that language only, backing off on real failures.
     private func sessionEnded(_ session: Session, failure: SpeechFailure?) {
         let language = session.language
