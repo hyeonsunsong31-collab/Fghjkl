@@ -90,6 +90,7 @@ final class Orchestrator {
         c.phase = .thinking
 
         // Deterministic grammar + neural decision.
+        CrashLog.breadcrumb("turn: grammar")
         let parsed = grammar.parse(text)
 
         // With the studio open, edits are work for the studio's queue ("make the snake faster",
@@ -108,8 +109,10 @@ final class Orchestrator {
                                deepThinkAvailable: c.deepThink.isAvailable,
                                deepThinkRequested: c.deepThinkEnabled,
                                tokenBudget: 900)
+        CrashLog.breadcrumb("turn: brain")
         let decision = c.brain.process(input)
         c.stimulateLattice(decision.activeNeurons)
+        CrashLog.breadcrumb("turn: route")
 
         let useFast = !parsed.isEmpty && parsed.confidence >= 0.75 && (decision.action == .fastCommand || parsed.confidence >= 0.88)
         let routeKey = useFast ? (parsed.commands.first.map { $0.intent.rawValue } ?? "fastCommand") : decision.action.rawValue
@@ -204,6 +207,7 @@ final class Orchestrator {
             workflow.start(step: i)
             saveCheckpoint(workflow)
             let stepStart = Date()
+            CrashLog.breadcrumb("turn: execute " + command.intent.rawValue)
             let outcome = await c.executor.execute(command, language: language, runID: runID)
             if outcome.success {
                 workflow.succeed(step: i, summary: outcome.detail.isEmpty ? nil : outcome.detail)
@@ -281,6 +285,7 @@ final class Orchestrator {
 
     private func executeConfirmed(_ command: Command, language: DetectedLanguage) async {
         let runID = c.records.beginRun(commandID: nil, title: command.text, action: "confirmed", estimated: nil)
+        CrashLog.breadcrumb("turn: execute " + command.intent.rawValue)
         let outcome = await c.executor.execute(command, language: language, runID: runID)
         let reply = outcome.success
             ? (outcome.spokenOverride ?? Persona.confirmation(for: command, language: language, detail: outcome.detail))

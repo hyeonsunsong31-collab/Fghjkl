@@ -8,6 +8,34 @@ private final class PlaybackToken: @unchecked Sendable {
     func advance() { lock.lock(); current += 1; lock.unlock() }
 }
 
+/// Renders system-voice speech into buffers on its own serial queue. `AVSpeechSynthesizer.write`
+/// loads the voice and synthesises the sentence before it returns; on the main thread that froze
+/// the screen and the keyboard for up to several seconds every time Jarvis spoke.
+private final class SpeechRenderer: @unchecked Sendable {
+    static let shared = SpeechRenderer()
+    let queue = DispatchQueue(label: "jarvis.speech-render", qos: .userInitiated)
+    /// Used only on `queue`.
+    private var synthesizer: AVSpeechSynthesizer?
+
+    func render(_ utterance: AVSpeechUtterance, _ callback: @escaping @Sendable (AVAudioBuffer) -> Void) {
+        queue.async {
+            let synth: AVSpeechSynthesizer
+            if let existing = self.synthesizer {
+                synth = existing
+            } else {
+                synth = AVSpeechSynthesizer()
+                self.synthesizer = synth
+            }
+            CrashLog.breadcrumb("speech: rendering off the main thread")
+            synth.write(utterance, toBufferCallback: callback)
+        }
+    }
+
+    func stop() {
+        queue.async { self.synthesizer?.stopSpeaking(at: .immediate) }
+    }
+}
+
 /// State of one `AVSpeechSynthesizer.write` rendering, shared with its background callback.
 /// Guarantees the continuation is resumed exactly once (end marker, cancel or timeout).
 private final class RenderState: @unchecked Sendable {
@@ -122,6 +150,7 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
         queue.removeAll()
         streamBuffer = ""
         synthesizer.stopSpeaking(at: .immediate)
+        SpeechRenderer.shared.stop()
         endDirectSpeech()
         AudioEngineHub.shared.stopPlayback()
         pumping = false
@@ -240,8 +269,8 @@ final class SpeechOutputService: NSObject, AVSpeechSynthesizerDelegate {
         let token = self.token
         return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
             let state = RenderState(c)
-            // Explicitly @Sendable: runs on the synthesizer's queue, never on the main actor.
-            synthesizer.write(utterance) { @Sendable (buffer: AVAudioBuffer) in
+            // Explicitly @Sendable: runs on the renderer's queue, never on the main actor.
+            SpeechRenderer.shared.render(utterance) { @Sendable (buffer: AVAudioBuffer) in
                 guard !state.isDone, let pcm = buffer as? AVAudioPCMBuffer else { return }
                 if pcm.frameLength == 0 {
                     state.finish() // end of utterance

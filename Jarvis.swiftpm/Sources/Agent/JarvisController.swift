@@ -154,11 +154,17 @@ final class JarvisController {
         }
         Task {
             // Permissions are requested from the onboarding screen, not on first launch.
+            CrashLog.breadcrumb("launch: speech input")
             if !micMuted && onboarded { await speechInput.start() }
+            CrashLog.breadcrumb("launch: Apple Intelligence prewarm")
             appleFM.prewarm()
+            CrashLog.breadcrumb("launch: Kokoro")
             await loadKokoroIfInstalled()
+            CrashLog.breadcrumb("launch: deep think")
             await deepThink.loadIfInstalled()
+            CrashLog.breadcrumb("launch: done")
         }
+        CrashLog.breadcrumb("launch: lattice")
         startLatticeLoop()
         startStallMonitor()
         // Automated tests of the real input paths: typing into the actual text field, and speech
@@ -729,9 +735,10 @@ final class JarvisController {
         if late > 0.6 {
             let secs = String(format: "%.2f", late)
             let p: String = phase.rawValue
-            let last: String = CrashLog.lastBreadcrumb
-            Log.agent.error("Main thread stalled for \(secs, privacy: .public)s (phase \(p, privacy: .public), last step: \(last, privacy: .public))")
-            CrashLog.breadcrumb("main thread stalled \(secs)s")
+            let last: String = CrashLog.lastMainStep
+            let other: String = CrashLog.lastBreadcrumb
+            Log.agent.error("Main thread stalled for \(secs, privacy: .public)s (phase \(p, privacy: .public), last main-thread step: \(last, privacy: .public); last step anywhere: \(other, privacy: .public))")
+            CrashLog.breadcrumb("main thread stalled \(secs)s", step: false)
         }
     }
 
@@ -974,7 +981,9 @@ final class JarvisController {
                 let budget = self.brain.hypothalamus.budget(for: DeviceState.body())
                 let events = self.activePanel == .brain ? min(budget.latticeEventsPerTick, 60_000) : min(budget.latticeEventsPerTick, 4_000)
                 guard events > 0 else { continue }
+                CrashLog.breadcrumb("lattice step")
                 let stats = self.lattice.step(eventBudget: events, synapsesPerSpike: 48)
+                CrashLog.breadcrumb("main idle")
                 if self.activePanel == .brain {
                     self.latticeStats = stats
                     self.latticeSample = stats.sample

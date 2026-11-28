@@ -24,15 +24,23 @@ enum CrashLog {
 
     static var fileURL: URL { JarvisPaths.logs.appendingPathComponent("last-crash.txt") }
 
+    /// The last step the main thread noted (main thread only).
+    private static var mainStep = ""
+
     /// Note what the app is about to do (cheap; call before risky platform work).
-    static func breadcrumb(_ text: String) {
+    /// `step: false` for notes that should not count as the main thread's current step.
+    static func breadcrumb(_ text: String, step: Bool = true) {
         let bytes = Array(text.utf8.prefix(crumbCapacity - 1))
         for (i, b) in bytes.enumerated() { crumb[i] = CChar(bitPattern: b) }
         crumb[bytes.count] = 0
+        if step && Thread.isMainThread { mainStep = text }
     }
 
-    /// The last breadcrumb (for diagnostics such as the main-thread stall monitor).
+    /// The last breadcrumb from any thread.
     static var lastBreadcrumb: String { String(cString: crumb) }
+
+    /// The last step noted on the main thread (for the main-thread stall monitor; main thread only).
+    static var lastMainStep: String { mainStep }
 
     /// The previous session's crash report (removed once read); nil when it ended normally.
     static func takeLastReport() -> String? {
