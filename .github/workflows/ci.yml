@@ -139,6 +139,8 @@ jobs:
           # Time limit for any single simulator command, so a hang shows up as a failure with logs.
           t() { local secs=$1; shift; perl -e 'alarm shift @ARGV; exec @ARGV' "$secs" "$@"; }
           phase() { echo "==== $1 ($(date +%T))"; }
+          # Screenshots are evidence, not assertions: retry a stuck capture, never fail the run on one.
+          shot() { for i in 1 2 3; do t 90 xcrun simctl io "$DEVICE" screenshot "$1" && return 0; echo "screenshot $1 attempt $i failed"; sleep 5; done; return 0; }
           xcodebuild -scheme Jarvis -destination 'generic/platform=iOS Simulator' -derivedDataPath dd \
             -skipMacroValidation -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build > sim-build.log 2>&1 || (tail -50 sim-build.log; exit 1)
           APP=$(find dd/Build/Products -name "*.app" -maxdepth 3 | head -1)
@@ -162,7 +164,9 @@ jobs:
           #    freshly booted simulator can take a few minutes on CI runners.
           t 600 xcrun simctl launch "$DEVICE" "$BUNDLE"
           sleep 20
-          t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-launch.png
+          echo "---- busiest host processes after launch (is the app spinning?) ----"
+          ps -Ao pid,%cpu,rss,comm | sort -k2 -nr | head -8 || true
+          shot ../screenshot-launch.png
           t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
           phase "2 scripted 3D commands"
           # 2) End-to-end commands (grammar → brain → executor → RealityKit), fed by a launch-argument
@@ -173,7 +177,7 @@ jobs:
           t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES \
             -JarvisScript "open the 3D space || make three red cubes || clone it twice || 파란 구 만들어줘"
           sleep 60
-          t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-3d.png
+          shot ../screenshot-3d.png
           kill $LOGPID || true
           echo "---- app log (agent) ----"; grep -E "Script command|agent|space3d" ../app-log.txt | tail -60 || true
           if t 60 xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP STILL RUNNING ✅"; else echo "APP NOT RUNNING ❌"; fi
@@ -187,7 +191,7 @@ jobs:
           t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES \
             -JarvisScript "make a red cube || clear the scene || yes || play bohemian rhapsody || open youtube"
           sleep 90
-          t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-music.png
+          shot ../screenshot-music.png
           kill $LOGPID || true
           echo "---- app log (music / apps / confirmation) ----"; grep -E "Script command|Turn|Confirm|Music|Open " ../app-log-music.txt | tail -40 || true
           if grep -q "Confirmed clearScene: success=true objects=0" ../app-log-music.txt; then echo "CONFIRMATION YES ✅"; else echo "CONFIRMATION NOT APPLIED ❌"; exit 1; fi
@@ -202,12 +206,12 @@ jobs:
           t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES -JarvisResetScene YES \
             -JarvisScript "make a red sports car with gold wheels and a spoiler"
           sleep 30
-          t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-design-car.png
+          shot ../screenshot-design-car.png
           t 60 xcrun simctl terminate "$DEVICE" "$BUNDLE" || true
           t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisNoMic YES -JarvisResetScene YES \
             -JarvisScript "design a two story house with a blue roof and a chimney || make the roof green || 눈이 빨간 로봇 만들어줘 || make a castle with 6 towers and red flags"
           sleep 75
-          t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-designs.png
+          shot ../screenshot-designs.png
           kill $LOGPID || true
           echo "---- app log (designs) ----"; grep -E "Script command|Turn|Design|Refined" ../app-log-design.txt | tail -40 || true
           for EXPECT in "Design: car/sports via library" "Design: house via library" "Refined design: house via library" "Design: robot via library" "Design: castle via library"; do
@@ -223,7 +227,7 @@ jobs:
           LOGPID=$!
           t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisPressBegin YES -JarvisForceDirectSpeech YES
           sleep 30
-          t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-begin.png
+          shot ../screenshot-begin.png
           kill $LOGPID || true
           echo "---- app log (begin) ----"; grep -E "Speaking|voice|Script|Turn" ../app-log-begin.txt | tail -30 || true
           if t 60 xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP ALIVE AFTER BEGIN ✅"; else echo "APP DIED AFTER BEGIN ❌"; exit 1; fi
@@ -237,7 +241,7 @@ jobs:
           LOGPID=$!
           t 300 xcrun simctl launch "$DEVICE" "$BUNDLE" -JarvisSkipOnboarding YES -JarvisPressEmergency YES
           sleep 35
-          t 60 xcrun simctl io "$DEVICE" screenshot ../screenshot-emergency.png
+          shot ../screenshot-emergency.png
           kill $LOGPID || true
           echo "---- app log (emergency) ----"; grep -E "Emergency|Wake response|Speaking|voice|Listening|Microphone|Audio" ../app-log-emergency.txt | tail -40 || true
           if t 60 xcrun simctl spawn "$DEVICE" launchctl list | grep -q "$BUNDLE"; then echo "APP ALIVE AFTER EMERGENCY WAKE ✅"; else echo "APP DIED AFTER EMERGENCY WAKE ❌"; exit 1; fi
